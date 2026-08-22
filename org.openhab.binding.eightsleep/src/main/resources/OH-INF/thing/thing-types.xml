@@ -1,0 +1,543 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<thing:thing-descriptions bindingId="eightsleep"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xmlns:thing="https://openhab.org/schemas/thing-description/v1.0.0"
+	xsi:schemaLocation="https://openhab.org/schemas/thing-description/v1.0.0 https://openhab.org/schemas/thing-description-1.0.0.xsd">
+
+	<!-- Account Bridge -->
+	<bridge-type id="account">
+		<label>Eight Sleep Account</label>
+		<description>An Eight Sleep cloud account. Each account bridge handles one Eight Sleep login and polls the
+		 Eight Sleep cloud API for device and sleep data.</description>
+		<semantic-equipment-tag>NetworkAppliance</semantic-equipment-tag>
+		<representation-property>username</representation-property>
+		<config-description>
+			<parameter name="username" type="text" required="true">
+				<label>Username</label>
+				<context>email</context>
+				<description>The e-mail address of your Eight Sleep account.</description>
+			</parameter>
+			<parameter name="password" type="text" required="true">
+				<label>Password</label>
+				<context>password</context>
+				<description>The password of your Eight Sleep account.</description>
+			</parameter>
+			<parameter name="clientId" type="text" required="false">
+				<label>Client ID</label>
+				<advanced>true</advanced>
+				<description>Optional OAuth client id override. Leave empty to use the client id of the official
+				 mobile app.</description>
+			</parameter>
+			<parameter name="clientSecret" type="text" required="false">
+				<label>Client Secret</label>
+				<context>password</context>
+				<advanced>true</advanced>
+				<description>Optional OAuth client secret override. Leave empty to use the client secret of the
+				 official mobile app.</description>
+			</parameter>
+			<parameter name="deviceRefreshInterval" type="integer" required="false">
+				<label>Device Refresh Interval</label>
+				<default>60</default>
+				<unitLabel>s</unitLabel>
+				<description>Polling interval in seconds for device state (heating levels, water, presence).</description>
+			</parameter>
+			<parameter name="userRefreshInterval" type="integer" required="false">
+				<label>User Data Refresh Interval</label>
+				<default>30</default>
+				<unitLabel>s</unitLabel>
+				<description>Polling interval in seconds for sleep data (trends, alarms).</description>
+			</parameter>
+			<parameter name="baseRefreshInterval" type="integer" required="false">
+				<label>Base Data Refresh Interval</label>
+				<default>60</default>
+				<unitLabel>s</unitLabel>
+				<description>Polling interval in seconds for adjustable base data (angles, presets).</description>
+			</parameter>
+			<parameter name="temperatureUnit" type="text" required="false">
+				<label>Temperature Unit</label>
+				<options>
+					<option value="C">Celsius</option>
+					<option value="F">Fahrenheit</option>
+				</options>
+				<description>Unit used to interpret plain number commands for temperatures. Leave empty to use
+				 Celsius. Quantity commands always carry their own unit.</description>
+			</parameter>
+		</config-description>
+	</bridge-type>
+
+	<!-- Bed Side Thing -->
+	<thing-type id="bedSide">
+		<supported-bridge-type-refs>
+			<bridge-type-ref id="account"/>
+		</supported-bridge-type-refs>
+		<label>Bed Side</label>
+		<description>A single side of an Eight Sleep smart mattress: sleep metrics, temperature control, base control
+		 and alarms of one sleeper.</description>
+		<category>Sensor</category>
+		<semantic-equipment-tag>Bed</semantic-equipment-tag>
+
+		<channel-groups>
+			<channel-group id="current" typeId="currentSleep"/>
+			<channel-group id="lastSleep" typeId="lastSleep"/>
+			<channel-group id="device" typeId="deviceState"/>
+			<channel-group id="base" typeId="baseControl"/>
+			<channel-group id="pillow" typeId="pillowControl"/>
+		</channel-groups>
+
+		<properties>
+			<property name="vendor">Eight Sleep</property>
+		</properties>
+
+		<representation-property>userId</representation-property>
+
+		<config-description>
+			<parameter name="userId" type="text" required="true">
+				<label>User ID</label>
+				<description>The Eight Sleep user id of the sleeper on this bed side. Populated automatically by
+				 discovery.</description>
+			</parameter>
+			<parameter name="label" type="text" required="false">
+				<label>Side</label>
+				<limitToOptions>true</limitToOptions>
+				<options>
+					<option value="left">Left</option>
+					<option value="right">Right</option>
+					<option value="solo">Both (solo)</option>
+				</options>
+				<description>The physical side this user sleeps on. Choose "Both (solo)" when one user controls the
+				 whole mattress; data is read from the left zone, which is the only zone populated for solo beds.
+				 Leave empty to default to Left.</description>
+			</parameter>
+		</config-description>
+	</thing-type>
+
+	<!-- ==================== channel groups ==================== -->
+
+	<channel-group-type id="currentSleep">
+		<label>Current Sleep</label>
+		<description>Data of the current or most recent sleep session.</description>
+		<channels>
+			<channel id="bedTemperature" typeId="bedTemperature"/>
+			<channel id="targetTemperature" typeId="targetTemperature"/>
+			<channel id="heartRate" typeId="heartRate"/>
+			<channel id="respiratoryRate" typeId="respiratoryRate"/>
+			<channel id="hrv" typeId="hrv"/>
+			<channel id="breathRate" typeId="breathRate"/>
+			<channel id="sleepScore" typeId="sleepScore"/>
+			<channel id="qualityScore" typeId="qualityScore"/>
+			<channel id="routineScore" typeId="routineScore"/>
+			<channel id="sleepStage" typeId="sleepStage"/>
+			<channel id="sessionStart" typeId="sessionStart"/>
+			<channel id="sessionEnd" typeId="sessionEnd"/>
+			<channel id="nextAlarm" typeId="nextAlarm"/>
+			<channel id="alarmEnabled" typeId="alarmEnabled"/>
+			<channel id="alarmTime" typeId="alarmTime"/>
+			<channel id="dismissAlarm" typeId="dismissAlarm"/>
+			<channel id="snoozeAlarm" typeId="snoozeAlarm"/>
+		</channels>
+	</channel-group-type>
+
+	<channel-group-type id="lastSleep">
+		<label>Last Sleep</label>
+		<description>Summary of the last completed sleep session.</description>
+		<channels>
+			<channel id="sleepScore" typeId="sleepScore"/>
+			<channel id="qualityScore" typeId="qualityScore"/>
+			<channel id="routineScore" typeId="routineScore"/>
+			<channel id="fitnessScore" typeId="fitnessScore"/>
+			<channel id="timeSlept" typeId="timeSlept"/>
+			<channel id="lightSleepDuration" typeId="lightSleepDuration"/>
+			<channel id="deepSleepDuration" typeId="deepSleepDuration"/>
+			<channel id="remSleepDuration" typeId="remSleepDuration"/>
+			<channel id="awakeDuration" typeId="awakeDuration"/>
+			<channel id="tossesTurns" typeId="tossesTurns"/>
+			<channel id="sessionStart" typeId="sessionStart"/>
+			<channel id="sessionEnd" typeId="sessionEnd"/>
+		</channels>
+	</channel-group-type>
+
+	<channel-group-type id="deviceState">
+		<label>Device State</label>
+		<description>Live device level data for this side of the mattress cover.</description>
+		<channels>
+			<channel id="heatingLevel" typeId="heatingLevel"/>
+			<channel id="heatingState" typeId="heatingState"/>
+			<channel id="heatingRemainingTime" typeId="heatingRemainingTime"/>
+			<channel id="sidePower" typeId="sidePower"/>
+			<channel id="ledBrightness" typeId="ledBrightness"/>
+			<channel id="hasWater" typeId="hasWater"/>
+			<channel id="needsPriming" typeId="needsPriming"/>
+			<channel id="isPriming" typeId="isPriming"/>
+			<channel id="lastPrime" typeId="lastPrime"/>
+			<channel id="roomTemperature" typeId="roomTemperature"/>
+			<channel id="awayMode" typeId="awayMode"/>
+			<channel id="primeTrigger" typeId="primeTrigger"/>
+		</channels>
+	</channel-group-type>
+
+	<channel-group-type id="baseControl">
+		<label>Adjustable Base</label>
+		<description>Controls and sensors of an optional Eight Sleep adjustable base. Only available when a base is
+		 paired with the bed.</description>
+		<channels>
+			<channel id="preset" typeId="basePreset"/>
+			<channel id="headAngle" typeId="headAngle"/>
+			<channel id="feetAngle" typeId="feetAngle"/>
+			<channel id="snoreMitigation" typeId="snoreMitigation"/>
+			<channel id="bedPresence" typeId="bedPresence"/>
+		</channels>
+	</channel-group-type>
+
+	<channel-group-type id="pillowControl">
+		<label>Pillow</label>
+		<description>The Pod 5 pillow, which heats and cools independently of the pod. Only populated when a pillow is
+		 reported for this bed side.</description>
+		<channels>
+			<channel id="pillowPower" typeId="sidePower"/>
+			<channel id="pillowTargetTemperature" typeId="targetTemperature"/>
+			<channel id="pillowHeatingLevel" typeId="heatingLevel"/>
+		</channels>
+	</channel-group-type>
+
+	<!-- ==================== channel types ==================== -->
+
+	<channel-type id="bedTemperature" advanced="true">
+		<item-type>Number:Temperature</item-type>
+		<label>Bed Temperature</label>
+		<description>Current temperature measured at the mattress surface of this side.</description>
+		<category>Temperature</category>
+		<tags>
+			<tag>Measurement</tag>
+			<tag>Temperature</tag>
+		</tags>
+		<state readOnly="true" pattern="%.1f %unit%"/>
+	</channel-type>
+
+	<channel-type id="targetTemperature">
+		<item-type>Number:Temperature</item-type>
+		<label>Target Temperature</label>
+		<description>Target bed temperature. Set it to heat or cool this side. The valid range corresponds to the raw
+		 heating level range -100 to 100 of the Eight Sleep API.</description>
+		<category>Temperature</category>
+		<tags>
+			<tag>Setpoint</tag>
+			<tag>Temperature</tag>
+		</tags>
+		<state min="13" max="43" step="0.5" pattern="%.1f %unit%" readOnly="false"/>
+	</channel-type>
+
+	<channel-type id="roomTemperature">
+		<item-type>Number:Temperature</item-type>
+		<label>Room Temperature</label>
+		<description>Ambient room temperature measured by the mattress cover.</description>
+		<category>Temperature</category>
+		<tags>
+			<tag>Measurement</tag>
+			<tag>Temperature</tag>
+		</tags>
+		<state readOnly="true" pattern="%.1f %unit%"/>
+	</channel-type>
+
+	<channel-type id="heartRate">
+		<item-type>Number:Frequency</item-type>
+		<label>Heart Rate</label>
+		<description>Current heart rate in beats per minute.</description>
+		<state readOnly="true" pattern="%d bpm">
+			<options>
+				<option value="">Heart rate</option>
+			</options>
+		</state>
+	</channel-type>
+
+	<channel-type id="respiratoryRate">
+		<item-type>Number</item-type>
+		<label>Respiratory Rate</label>
+		<description>Current respiratory rate in breaths per minute.</description>
+		<state readOnly="true" pattern="%.1f /min"/>
+	</channel-type>
+
+	<channel-type id="hrv">
+		<item-type>Number:Time</item-type>
+		<label>Heart Rate Variability</label>
+		<description>Current heart rate variability.</description>
+		<state readOnly="true" pattern="%d %unit%"/>
+	</channel-type>
+
+	<channel-type id="breathRate">
+		<item-type>Number</item-type>
+		<label>Breath Rate</label>
+		<description>Breathing rate reported by the sleep tracking.</description>
+		<state readOnly="true" pattern="%.1f /min"/>
+	</channel-type>
+
+	<channel-type id="sleepScore">
+		<item-type>Number:Dimensionless</item-type>
+		<label>Sleep Score</label>
+		<description>Overall sleep score as computed by the Eight Sleep cloud.</description>
+		<state readOnly="true" min="0" max="100" pattern="%d %%"/>
+	</channel-type>
+
+	<channel-type id="qualityScore">
+		<item-type>Number:Dimensionless</item-type>
+		<label>Sleep Quality Score</label>
+		<description>Sleep quality score as computed by the Eight Sleep cloud.</description>
+		<state readOnly="true" min="0" max="100" pattern="%d %%"/>
+	</channel-type>
+
+	<channel-type id="routineScore">
+		<item-type>Number:Dimensionless</item-type>
+		<label>Sleep Routine Score</label>
+		<description>Sleep routine score as computed by the Eight Sleep cloud.</description>
+		<state readOnly="true" min="0" max="100" pattern="%d %%"/>
+	</channel-type>
+
+	<channel-type id="fitnessScore">
+		<item-type>Number:Dimensionless</item-type>
+		<label>Sleep Fitness Score</label>
+		<description>Sleep fitness score as computed by the Eight Sleep cloud.</description>
+		<state readOnly="true" min="0" max="100" pattern="%d %%"/>
+	</channel-type>
+
+	<channel-type id="timeSlept">
+		<item-type>Number:Time</item-type>
+		<label>Time Slept</label>
+		<description>Total duration of the last sleep session.</description>
+		<category>Time</category>
+		<tags>
+			<tag>Measurement</tag>
+			<tag>Duration</tag>
+		</tags>
+		<state readOnly="true" pattern="%d %unit%"/>
+	</channel-type>
+
+	<channel-type id="lightSleepDuration">
+		<item-type>Number:Time</item-type>
+		<label>Light Sleep Duration</label>
+		<description>Time spent in light sleep during the last session.</description>
+		<state readOnly="true" pattern="%d %unit%"/>
+	</channel-type>
+
+	<channel-type id="deepSleepDuration">
+		<item-type>Number:Time</item-type>
+		<label>Deep Sleep Duration</label>
+		<description>Time spent in deep sleep during the last session.</description>
+		<state readOnly="true" pattern="%d %unit%"/>
+	</channel-type>
+
+	<channel-type id="remSleepDuration">
+		<item-type>Number:Time</item-type>
+		<label>REM Sleep Duration</label>
+		<description>Time spent in REM sleep during the last session.</description>
+		<state readOnly="true" pattern="%d %unit%"/>
+	</channel-type>
+
+	<channel-type id="awakeDuration">
+		<item-type>Number:Time</item-type>
+		<label>Awake Duration</label>
+		<description>Time spent awake during the last session.</description>
+		<state readOnly="true" pattern="%d %unit%"/>
+	</channel-type>
+
+	<channel-type id="sleepStage">
+		<item-type>String</item-type>
+		<label>Sleep Stage</label>
+		<description>Current stage of the active sleep session (awake, light, deep, rem).</description>
+		<state readOnly="true" pattern="%s"/>
+	</channel-type>
+
+	<channel-type id="tossesTurns">
+		<item-type>Number</item-type>
+		<label>Tosses and Turns</label>
+		<description>Number of tosses and turns during the last session.</description>
+		<state readOnly="true" pattern="%d"/>
+	</channel-type>
+
+	<channel-type id="sessionStart">
+		<item-type>DateTime</item-type>
+		<label>Session Start</label>
+		<description>Date and time when the current sleep session started.</description>
+		<category>Time</category>
+		<state readOnly="true"/>
+	</channel-type>
+
+	<channel-type id="sessionEnd">
+		<item-type>DateTime</item-type>
+		<label>Session End</label>
+		<description>Date and time when the sleep session ended.</description>
+		<category>Time</category>
+		<state readOnly="true"/>
+	</channel-type>
+
+	<channel-type id="nextAlarm">
+		<item-type>DateTime</item-type>
+		<label>Next Alarm</label>
+		<description>Date and time of the next scheduled alarm.</description>
+		<state readOnly="true"/>
+	</channel-type>
+
+	<channel-type id="alarmEnabled">
+		<item-type>Switch</item-type>
+		<label>Alarm Enabled</label>
+		<description>Enable or disable the next scheduled alarm.</description>
+	</channel-type>
+
+	<channel-type id="alarmTime">
+		<item-type>DateTime</item-type>
+		<label>Alarm Time</label>
+		<description>Time of day of the next scheduled alarm. Command a DateTime to reschedule it.</description>
+	</channel-type>
+
+	<channel-type id="dismissAlarm">
+		<item-type>Switch</item-type>
+		<label>Dismiss Alarm</label>
+		<description>Trigger to dismiss/stop the currently ringing or next alarm.</description>
+	</channel-type>
+
+	<channel-type id="snoozeAlarm">
+		<item-type>Switch</item-type>
+		<label>Snooze Alarm</label>
+		<description>Trigger to snooze the currently ringing alarm for the configured snooze minutes.</description>
+	</channel-type>
+
+	<channel-type id="heatingLevel" advanced="true">
+		<item-type>Number</item-type>
+		<label>Heating Level</label>
+		<description>Raw heating/cooling level as used by the Eight Sleep API (-100 to 100).</description>
+		<state readOnly="true" min="-100" max="100" step="1" pattern="%d"/>
+	</channel-type>
+
+	<channel-type id="heatingState">
+		<item-type>String</item-type>
+		<label>Heating State</label>
+		<description>Whether this side is currently heating, cooling or idle.</description>
+		<tags>
+			<tag>Status</tag>
+		</tags>
+		<state readOnly="true" pattern="%s">
+			<options>
+				<option value="heating">Heating</option>
+				<option value="cooling">Cooling</option>
+				<option value="idle">Idle</option>
+			</options>
+		</state>
+	</channel-type>
+
+	<channel-type id="heatingRemainingTime">
+		<item-type>Number:Time</item-type>
+		<label>Heating Time Remaining</label>
+		<description>Remaining time of the current heating/cooling period.</description>
+		<state readOnly="true" pattern="%d %unit%"/>
+	</channel-type>
+
+	<channel-type id="sidePower">
+		<item-type>Switch</item-type>
+		<label>Side Power</label>
+		<description>Turn this side of the bed on (smart mode) or off.</description>
+		<tags>
+			<tag>Switch</tag>
+			<tag>Power</tag>
+		</tags>
+	</channel-type>
+
+	<channel-type id="basePreset">
+		<item-type>String</item-type>
+		<label>Base Preset</label>
+		<description>Preset position of the adjustable base.</description>
+		<state pattern="%s">
+			<options>
+				<option value="sleep">Sleep</option>
+				<option value="relaxing">Relaxing</option>
+				<option value="reading">Reading</option>
+			</options>
+		</state>
+	</channel-type>
+
+	<channel-type id="headAngle">
+		<item-type>Number:Angle</item-type>
+		<label>Head Angle</label>
+		<description>Angle of the head/torso section of the adjustable base (0-45 degrees).</description>
+		<state min="0" max="45" step="1" pattern="%d %unit%"/>
+	</channel-type>
+
+	<channel-type id="feetAngle">
+		<item-type>Number:Angle</item-type>
+		<label>Feet Angle</label>
+		<description>Angle of the feet/leg section of the adjustable base (0-20 degrees).</description>
+		<state min="0" max="20" step="1" pattern="%d %unit%"/>
+	</channel-type>
+
+	<channel-type id="snoreMitigation">
+		<item-type>Switch</item-type>
+		<label>Snore Mitigation</label>
+		<description>ON while snore mitigation is actively raising the head section.</description>
+		<state readOnly="true"/>
+	</channel-type>
+
+	<channel-type id="bedPresence">
+		<item-type>Switch</item-type>
+		<label>Bed Presence</label>
+		<description>ON when someone is present on this side of the bed.</description>
+		<tags>
+			<tag>Status</tag>
+			<tag>Presence</tag>
+		</tags>
+		<state readOnly="true"/>
+	</channel-type>
+
+	<channel-type id="ledBrightness">
+		<item-type>Number:Dimensionless</item-type>
+		<label>LED Brightness</label>
+		<description>Brightness of the hub LED (0-100).</description>
+		<category>Lightbulb</category>
+		<state min="0" max="100" step="1" pattern="%d %%"/>
+	</channel-type>
+
+	<channel-type id="hasWater">
+		<item-type>Switch</item-type>
+		<label>Has Water</label>
+		<description>ON when the water reservoir has water. OFF means you need to refill.</description>
+		<state readOnly="true"/>
+	</channel-type>
+
+	<channel-type id="needsPriming">
+		<item-type>Switch</item-type>
+		<label>Needs Priming</label>
+		<description>ON when the device reports it needs priming.</description>
+		<state readOnly="true"/>
+	</channel-type>
+
+	<channel-type id="isPriming">
+		<item-type>Switch</item-type>
+		<label>Priming In Progress</label>
+		<description>ON while a priming run is in progress.</description>
+		<state readOnly="true"/>
+	</channel-type>
+
+	<channel-type id="lastPrime">
+		<item-type>DateTime</item-type>
+		<label>Last Prime</label>
+		<description>Date and time of the last completed priming.</description>
+		<category>Time</category>
+		<state readOnly="true"/>
+	</channel-type>
+
+	<channel-type id="awayMode">
+		<item-type>Switch</item-type>
+		<label>Away Mode</label>
+		<description>ON while this user is in away mode. Turn it on/off to start or end away mode. The state is
+		 UNDEF until the first away-status poll, then reflects what the API reports, so it also flips when away
+		 mode is changed in the Eight Sleep app.</description>
+		<tags>
+			<tag>Status</tag>
+			<tag>Presence</tag>
+		</tags>
+	</channel-type>
+
+	<channel-type id="primeTrigger">
+		<item-type>Switch</item-type>
+		<label>Start Priming</label>
+		<description>Send ON to start the pod priming procedure. This user receives the completion notification.
+		 Check isPriming for progress.</description>
+	</channel-type>
+
+</thing:thing-descriptions>

@@ -1,0 +1,11 @@
+target/
+*.class
+*.jar
+!tools/fixtures/*.json
+.idea/
+*.iml
+.vscode/
+.settings/
+.classpath
+.project
+dependency-reduced-pom.xml

@@ -1,0 +1,169 @@
+{
+  "result": {
+    "deviceId": "dev_4100280005473933",
+    "ownerId": "user_a1b2c3d4e5f6g7h8",
+    "leftHeatingLevel": -16,
+    "leftTargetHeatingLevel": 0,
+    "leftNowHeating": false,
+    "leftHeatingDuration": 0,
+    "leftSchedule": {
+      "daysUTC": {
+        "sunday": false,
+        "monday": false,
+        "tuesday": false,
+        "wednesday": false,
+        "thursday": false,
+        "friday": false,
+        "saturday": false
+      },
+      "enabled": false,
+      "startUTCHour": 0,
+      "startUTCMinute": 0,
+      "durationSeconds": 0
+    },
+    "rightHeatingLevel": -10,
+    "rightTargetHeatingLevel": 0,
+    "rightNowHeating": false,
+    "rightHeatingDuration": 0,
+    "rightSchedule": {
+      "daysUTC": {
+        "sunday": false,
+        "monday": false,
+        "tuesday": false,
+        "wednesday": false,
+        "thursday": false,
+        "friday": false,
+        "saturday": false
+      },
+      "enabled": false,
+      "startUTCHour": 0,
+      "startUTCMinute": 0,
+      "durationSeconds": 0
+    },
+    "priming": false,
+    "lastLowWater": "2026-08-21T16:04:26.545Z",
+    "lastPrime": "2026-08-21T17:51:02.000Z",
+    "needsPriming": false,
+    "hasWater": true,
+    "ledBrightnessLevel": 49,
+    "sensorInfo": {
+      "label": "20600-0004-I14-B680B491",
+      "partNumber": "20600",
+      "sku": "0004",
+      "hwRevision": "I14",
+      "serialNumber": "<redacted>",
+      "lastConnected": "2026-08-22T20:46:53.469Z",
+      "skuName": "full",
+      "model": "Pod4",
+      "version": 4,
+      "supportsMaintenanceInserts": true,
+      "coverType": "dual",
+      "connected": true
+    },
+    "sensors": [
+      {
+        "label": "20600-0004-I14-B680B491",
+        "partNumber": "20600",
+        "sku": "0004",
+        "hwRevision": "I14",
+        "serialNumber": "<redacted>",
+        "lastConnected": "2026-08-22T20:46:53.469Z",
+        "skuName": "full",
+        "model": "Pod4",
+        "version": 4,
+        "coverType": "dual",
+        "connected": true
+      }
+    ],
+    "expectedPeripherals": [
+      {
+        "position": "left",
+        "peripheralType": "cover",
+        "coverType": "dual",
+        "updatedAt": "2020-01-01T00:00:00.000Z"
+      },
+      {
+        "position": "right",
+        "peripheralType": "cover",
+        "coverType": "dual",
+        "updatedAt": "2020-01-01T00:00:00.000Z"
+      }
+    ],
+    "hubInfo": "20500-0001-B02-000060CC",
+    "timezone": "America/Los_Angeles",
+    "location": [
+      -122.31308,
+      47.6153965
+    ],
+    "mattressInfo": {
+      "firstUsedDate": null,
+      "eightMattress": null,
+      "brand": null
+    },
+    "firmwareCommit": "feb0364",
+    "firmwareVersion": "2.7.0.0",
+    "firmwareUpdated": true,
+    "firmwareUpdating": false,
+    "lastFirmwareUpdateStart": "1970-01-01T00:00:00.000+00:00",
+    "lastHeard": "2026-08-22T20:47:09.463Z",
+    "online": true,
+    "encasementType": "pod-pro-cover",
+    "leftKelvin": {
+      "targetLevels": [
+        0,
+        0,
+        0
+      ],
+      "scheduleProfiles": [],
+      "alarms": [],
+      "level": 0,
+      "currentTargetLevel": 0,
+      "active": false,
+      "currentActivity": "off"
+    },
+    "rightKelvin": {
+      "targetLevels": [
+        0,
+        0,
+        0
+      ],
+      "scheduleProfiles": [],
+      "alarms": [],
+      "level": 0,
+      "currentTargetLevel": 0,
+      "active": false,
+      "currentActivity": "off"
+    },
+    "features": [
+      "warming",
+      "cooling",
+      "vibration",
+      "alarms"
+    ],
+    "leftUserInvitationPending": false,
+    "rightUserInvitationPending": false,
+    "modelString": "Pod 2 Pro",
+    "hubSerial": "000060CC",
+    "wifiInfo": "<redacted>",
+    "awaySides": {
+      "leftUserId": "user_a1b2c3d4e5f6g7h8",
+      "rightUserId": "user_a1b2c3d4e5f6g7h8"
+    },
+    "isTemperatureAvailable": true,
+    "deactivated": {},
+    "sides": {
+      "left": {
+        "expected": "cover",
+        "connected": "cover",
+        "fault": false,
+        "coverType": "dual"
+      },
+      "right": {
+        "expected": "cover",
+        "connected": "cover",
+        "fault": false,
+        "coverType": "dual"
+      }
+    }
+  }
+}

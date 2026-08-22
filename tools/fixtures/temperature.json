@@ -1,0 +1,55 @@
+{
+  "currentLevel": 0,
+  "overrideLevels": {},
+  "currentState": {
+    "type": "off",
+    "started": "2026-08-22T17:00:24Z",
+    "instance": {
+      "timestamp": "2026-08-22T17:00:24Z"
+    }
+  },
+  "scheduleType": "smart",
+  "smart": {
+    "bedTimeLevel": -32,
+    "initialSleepLevel": -24,
+    "finalSleepLevel": -12
+  },
+  "timeBased": {
+    "level": 0,
+    "durationSeconds": 0
+  },
+  "currentSchedule": {
+    "id": "2e558dc7-58cf-4bab-9ce0-1c03fdeb09bd",
+    "enabled": true,
+    "time": "21:30:00",
+    "days": [
+      "friday",
+      "saturday"
+    ],
+    "tags": [],
+    "startSettings": {
+      "bedtime": -40
+    }
+  },
+  "nextSchedule": {
+    "nextTimestamp": "2026-08-22T21:30:00Z",
+    "id": "e7cdc7a6-5c28-4768-b895-329104b44fb7",
+    "enabled": true,
+    "time": "21:00:00",
+    "days": [
+      "monday",
+      "tuesday",
+      "wednesday",
+      "thursday",
+      "sunday"
+    ],
+    "tags": [],
+    "startSettings": {
+      "bedtime": -40
+    }
+  },
+  "nextBedtimeDisplayWindow": {
+    "displayWindowHours": 16,
+    "nextTimestampInWindow": true
+  }
+}

@@ -1,0 +1,11 @@
+Third-party content in the Eight Sleep Binding
+==============================================
+
+This binding is an original work. It communicates with the Eight Sleep cloud
+API (client-api.8slp.net, app-api.8slp.net, auth-api.8slp.net) and contains no
+third-party source code.
+
+Runtime dependencies (provided by the openHAB runtime):
+- com.google.code.gson:gson - Google Gson, Apache License 2.0
+- org.slf4j:slf4j-api - MIT License
+- org.eclipse.jdt:org.eclipse.jdt.annotation - Eclipse Public License 2.0
