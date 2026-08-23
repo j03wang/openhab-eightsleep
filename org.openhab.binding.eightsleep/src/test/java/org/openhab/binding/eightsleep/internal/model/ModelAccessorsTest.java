@@ -21,6 +21,7 @@ import java.util.List;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.junit.Test;
+import org.openhab.binding.eightsleep.internal.model.UserDataCache;
 
 /**
  * Accessor-level tests for the small typed models (feature flags, side getters,
@@ -96,12 +97,12 @@ public class ModelAccessorsTest {
         assertEquals(42, state.getVolumePercent());
     }
 
-    // ==================== AccountHandler.UserData helpers ====================
+    // ==================== UserDataCache helpers ====================
 
     @Test
     public void userDataBaseSideNullSafe() {
-        org.openhab.binding.eightsleep.internal.handler.AccountHandler.UserData data =
-                new org.openhab.binding.eightsleep.internal.handler.AccountHandler.UserData();
+        UserDataCache data =
+                new UserDataCache();
         assertNull(data.getBaseSide("left"));
 
         BaseData base = new BaseData();

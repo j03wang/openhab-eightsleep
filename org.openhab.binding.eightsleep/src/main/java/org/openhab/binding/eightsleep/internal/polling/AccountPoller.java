@@ -1,0 +1,193 @@
+/*
+ * Copyright (c) 2010-2026 Contributors to the openHAB project
+ *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the Eclipse Public License 2.0 which is available at
+ * http://www.eclipse.org/legal/epl-2.0
+ *
+ * SPDX-License-Identifier: EPL-2.0
+ */
+package org.openhab.binding.eightsleep.internal.polling;
+
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.util.Set;
+import java.util.concurrent.CopyOnWriteArraySet;
+
+import org.eclipse.jdt.annotation.NonNullByDefault;
+import org.eclipse.jdt.annotation.Nullable;
+import org.openhab.binding.eightsleep.internal.api.ApiException;
+import org.openhab.binding.eightsleep.internal.api.EightSleepApiClient;
+import org.openhab.binding.eightsleep.internal.handler.AwayModeTracker;
+import org.openhab.binding.eightsleep.internal.model.UserDataCache;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * Runs the per-user poll fan-out (trends, speaker, alarms, temperature, pillow)
+ * and the device-level away-state poll, writing results into {@link UserDataCache}
+ * entries. Extracted from AccountHandler; the handler only schedules it.
+ *
+ * @author Joe Wang - Initial contribution
+ */
+@NonNullByDefault
+public class AccountPoller {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(AccountPoller.class);
+
+    private final EightSleepApiClient client;
+    private final String deviceId;
+    private final java.util.function.Function<String, UserDataCache> cacheFor;
+    private final Runnable speakerMarker;
+
+    /** User ids currently registered for polling. */
+    private final Set<String> userids = new CopyOnWriteArraySet<>();
+
+    public AccountPoller(EightSleepApiClient client, String deviceId,
+            java.util.function.Function<String, UserDataCache> cacheFor, Runnable speakerMarker) {
+        this.client = client;
+        this.deviceId = deviceId;
+        this.cacheFor = cacheFor;
+        this.speakerMarker = speakerMarker;
+    }
+
+    public void register(String userId) {
+        userids.add(userId);
+    }
+
+    public void unregister(String userId) {
+        userids.remove(userId);
+    }
+
+    /**
+     * Polls which users are currently in away mode and updates their cached state.
+     * Away-state read model (verified against live captures):
+     * away = user in awaySides AND removed from their side slot;
+     * present = user occupies a side slot (even though awaySides still lists them).
+     *
+     * @param awayModeTracker command-stamp bookkeeping for the LWW merge
+     */
+    public void pollAwayState(AwayModeTrackerHolder tracker) {
+        // Stamp with the START time: the payload reflects the world as it was when
+        // the request was issued, so any command sent while it is in flight is newer.
+        Instant observedAt = Instant.now();
+        client.getDeviceUsers(deviceId).thenAccept(users -> {
+            Set<String> candidates = new java.util.HashSet<>();
+            if (users.leftUserId != null) {
+                candidates.add(users.leftUserId);
+            }
+            if (users.rightUserId != null) {
+                candidates.add(users.rightUserId);
+            }
+            candidates.addAll(users.awaySides.values());
+
+            for (String uid : candidates) {
+                UserDataCache data = cacheFor.apply(uid);
+                boolean away = users.isAway(uid);
+                // last-write-wins: ignore a polled value that predates a command
+                if (AwayModeTracker.acceptsPolledAway(tracker.commandedAtOf(uid), observedAt)) {
+                    data.awayMode = away;
+                    data.awayPolledAt = observedAt;
+                }
+            }
+            tracker.markPolled();
+        }).exceptionally(ex -> {
+            LOGGER.debug("Failed to refresh away-mode state: {}",
+                    ex.getCause() != null ? ex.getCause().getMessage() : ex.getMessage());
+            return null;
+        });
+    }
+
+    /** Polls trends, speaker state, alarms, temperature and pillow data per registered user. */
+    public void pollUserData(int trendLookbackDays) {
+        ZonedDateTime now = ZonedDateTime.now(ZoneId.systemDefault());
+        ZonedDateTime start = now.minusDays(trendLookbackDays);
+        // The trends API wants the IANA timezone id (upstream passes the HA timezone)
+        String tz = java.util.TimeZone.getDefault().getID();
+        for (String userId : Set.copyOf(userids)) {
+            client.getUserTrends(userId, start, now, tz).thenAccept(days -> {
+                UserDataCache data = cacheFor.apply(userId);
+                data.trendDays = days;
+                data.lastUpdated = Instant.now();
+            }).exceptionally(ex -> {
+                Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                LOGGER.debug("Failed to refresh trends for user {}: {}", userId, cause.getMessage());
+                return null;
+            });
+
+            client.getPlayerState(userId).thenAccept(state -> {
+                if (state.hasSpeaker()) {
+                    speakerMarker.run();
+                }
+                UserDataCache data = cacheFor.apply(userId);
+                data.playerState = state;
+            }).exceptionally(ex -> {
+                // Speaker is optional; a missing endpoint is not an error worth logging at warn level
+                LOGGER.debug("Speaker state not available for user {}", userId);
+                return null;
+            });
+
+            Instant pollStartedAt = Instant.now();
+            client.getAlarms(userId).thenAccept(alarms -> {
+                UserDataCache data = cacheFor.apply(userId);
+                // Stamp with the START time: any command issued while this request was
+                // in flight is newer and must win the LWW merge.
+                data.alarmsPolledAt = pollStartedAt;
+                data.alarms.clear();
+                data.alarms.addAll(alarms);
+            }).exceptionally(ex -> {
+                handleAlarmFailure(userId, pollStartedAt, ex);
+                return null;
+            });
+
+            Instant tempPollStartedAt = Instant.now();
+            client.getTemperature(userId).thenAccept(temp -> {
+                UserDataCache data = cacheFor.apply(userId);
+                // Stamp with the START time so commands issued mid-flight win LWW.
+                data.temperatureAt = tempPollStartedAt;
+                data.temperature = temp;
+            }).exceptionally(ex -> {
+                LOGGER.debug("Failed to refresh temperature data for user {}", userId);
+                return null;
+            });
+
+            client.getTemperatureAll(userId).thenAccept(pillowData -> {
+                UserDataCache data = cacheFor.apply(userId);
+                data.pillowData = pillowData;
+            }).exceptionally(ex -> {
+                // Pillow is optional (Pod 5 accessory); a missing payload just means no pillow
+                LOGGER.debug("No pillow data for user {}", userId);
+                return null;
+            });
+        }
+    }
+
+    /**
+     * Accounts without an active subscription get 403 from the alarms API; degrade
+     * gracefully so the rest of the binding keeps working (upstream #122).
+     */
+    private void handleAlarmFailure(String userId, Instant pollStartedAt, Throwable ex) {
+        Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+        if (cause instanceof ApiException apiEx && apiEx.isSubscriptionRequired()) {
+            LOGGER.debug("Alarms require a subscription for user {}; skipping", userId);
+            UserDataCache data = cacheFor.apply(userId);
+            data.alarms.clear();
+            // Stamp so the LWW merge knows this empty list is fresh - otherwise the
+            // alarm channels would keep showing a stale alarm forever.
+            data.alarmsPolledAt = pollStartedAt;
+        } else {
+            LOGGER.debug("Failed to refresh alarms for user {}: {}", userId, cause.getMessage());
+        }
+    }
+
+    /** Minimal surface the poller needs from the account's away-mode bookkeeping. */
+    public interface AwayModeTrackerHolder {
+        java.time.@Nullable Instant commandedAtOf(String userId);
+
+        void markPolled();
+    }
+}

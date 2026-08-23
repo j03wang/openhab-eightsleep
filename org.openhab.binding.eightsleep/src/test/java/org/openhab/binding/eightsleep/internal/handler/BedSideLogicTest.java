@@ -50,10 +50,10 @@ public class BedSideLogicTest {
     @Test
     public void quantityTypesConvertToCelsius() {
         // Fahrenheit IS Celsius-compatible: parseTemperature returns the Celsius value
-        assertEquals(22.2, BedSideHandler.parseTemperature(new QuantityType<>(72.0, ImperialUnits.FAHRENHEIT)), 0.1);
+        assertEquals(22.2, BedSideCommands.parseTemperature(new QuantityType<>(72.0, ImperialUnits.FAHRENHEIT)), 0.1);
         // Kelvin likewise
-        assertEquals(20.0, BedSideHandler.parseTemperature(new QuantityType<>(293.15, Units.KELVIN)), 0.01);
-        assertEquals(21.5, BedSideHandler.parseTemperature(new QuantityType<>(21.5, SIUnits.CELSIUS)), 1e-9);
+        assertEquals(20.0, BedSideCommands.parseTemperature(new QuantityType<>(293.15, Units.KELVIN)), 0.01);
+        assertEquals(21.5, BedSideCommands.parseTemperature(new QuantityType<>(21.5, SIUnits.CELSIUS)), 1e-9);
         // handleTargetTemperature re-derives the unit from the command for the conversion table
         var fahrenheitCommand = new QuantityType<>(72.0, ImperialUnits.FAHRENHEIT);
         assertTrue(fahrenheitCommand.getUnit().isCompatible(ImperialUnits.FAHRENHEIT));
@@ -61,41 +61,41 @@ public class BedSideLogicTest {
 
     @Test
     public void incompatibleUnitIsNaN() {
-        assertTrue(Double.isNaN(BedSideHandler.parseTemperature(new QuantityType<>(5, Units.SECOND))));
-        assertTrue(Double.isNaN(BedSideHandler.parseTemperature(new QuantityType<>(50, Units.PERCENT))));
+        assertTrue(Double.isNaN(BedSideCommands.parseTemperature(new QuantityType<>(5, Units.SECOND))));
+        assertTrue(Double.isNaN(BedSideCommands.parseTemperature(new QuantityType<>(50, Units.PERCENT))));
     }
 
     @Test
     public void plainNumbersPassThrough() {
-        assertEquals(-16.5, BedSideHandler.parseTemperature(new DecimalType("-16.5")), 1e-9);
-        assertEquals(30.25, BedSideHandler.parseTemperature(new StringType("30.25")), 1e-9);
-        assertTrue("unparsable string", Double.isNaN(BedSideHandler.parseTemperature(new StringType("warm"))));
+        assertEquals(-16.5, BedSideCommands.parseTemperature(new DecimalType("-16.5")), 1e-9);
+        assertEquals(30.25, BedSideCommands.parseTemperature(new StringType("30.25")), 1e-9);
+        assertTrue("unparsable string", Double.isNaN(BedSideCommands.parseTemperature(new StringType("warm"))));
     }
 
     // ==================== mergeBaseAngles ====================
 
     @Test
     public void headCommandKeepsCachedLegAngle() {
-        assertArrayEquals(new int[] { 20, 45 }, BedSideHandler.mergeBaseAngles(true, 99, 20, 10));
+        assertArrayEquals(new int[] { 20, 45 }, BedSideCommands.mergeBaseAngles(true, 99, 20, 10));
     }
 
     @Test
     public void feetCommandKeepsCachedTorsoAngle() {
-        assertArrayEquals(new int[] { 15, 40 }, BedSideHandler.mergeBaseAngles(false, 15, 20, 40));
+        assertArrayEquals(new int[] { 15, 40 }, BedSideCommands.mergeBaseAngles(false, 15, 20, 40));
     }
 
     @Test
     public void anglesClampToSectionRanges() {
         // head max 45 even when commanding higher; feet max 20
-        assertArrayEquals(new int[] { 5, 45 }, BedSideHandler.mergeBaseAngles(true, 999, 5, null));
-        assertArrayEquals(new int[] { 0, 7 }, BedSideHandler.mergeBaseAngles(false, -5, null, 7));
+        assertArrayEquals(new int[] { 5, 45 }, BedSideCommands.mergeBaseAngles(true, 999, 5, null));
+        assertArrayEquals(new int[] { 0, 7 }, BedSideCommands.mergeBaseAngles(false, -5, null, 7));
     }
 
     @Test
     public void missingCacheDefaultsOtherAxisToZero() {
         // documented risk: without polled base data the other axis snaps to flat
-        assertArrayEquals(new int[] { 0, 30 }, BedSideHandler.mergeBaseAngles(true, 30, null, 12));
-        assertArrayEquals(new int[] { 10, 0 }, BedSideHandler.mergeBaseAngles(false, 10, 8, null));
+        assertArrayEquals(new int[] { 0, 30 }, BedSideCommands.mergeBaseAngles(true, 30, null, 12));
+        assertArrayEquals(new int[] { 10, 0 }, BedSideCommands.mergeBaseAngles(false, 10, 8, null));
     }
 
     // ==================== currentSleepStage ====================
@@ -114,16 +114,16 @@ public class BedSideLogicTest {
     public void stageMatchesSegmentCoveringNow() {
         var session = JsonParser.parseString(STAGE_SESSION).getAsJsonObject();
         // 5 min in -> inside the awake segment (0..600s)
-        assertEquals("awake", BedSideHandler.currentSleepStage(session,
+        assertEquals("awake", org.openhab.binding.eightsleep.internal.sleep.SleepSession.currentStage(session,
                 Instant.parse("2026-08-23T05:05:00Z")));
         // 40 min (2400s) -> exactly the light/deep boundary; deep covers it
-        assertEquals("deep", BedSideHandler.currentSleepStage(session,
+        assertEquals("deep", org.openhab.binding.eightsleep.internal.sleep.SleepSession.currentStage(session,
                 Instant.parse("2026-08-23T05:40:00Z")));
         // 55 min (3300s) -> still deep; rem starts at 60 min
-        assertEquals("deep", BedSideHandler.currentSleepStage(session,
+        assertEquals("deep", org.openhab.binding.eightsleep.internal.sleep.SleepSession.currentStage(session,
                 Instant.parse("2026-08-23T05:55:00Z")));
         // 65 min (3900s) -> inside rem
-        assertEquals("rem", BedSideHandler.currentSleepStage(session,
+        assertEquals("rem", org.openhab.binding.eightsleep.internal.sleep.SleepSession.currentStage(session,
                 Instant.parse("2026-08-23T06:05:00Z")));
     }
 
@@ -131,7 +131,7 @@ public class BedSideLogicTest {
     @Test
     public void noStageAfterSleepEnd() {
         var session = JsonParser.parseString(STAGE_SESSION).getAsJsonObject();
-        assertNull(BedSideHandler.currentSleepStage(session,
+        assertNull(org.openhab.binding.eightsleep.internal.sleep.SleepSession.currentStage(session,
                 Instant.parse("2026-08-23T06:30:00Z")));
     }
 
@@ -140,14 +140,14 @@ public class BedSideLogicTest {
     public void stageAtExactSleepEndIsLastSegment() {
         var session = JsonParser.parseString(STAGE_SESSION).getAsJsonObject();
         // total stages = 600+1800+1200+900 = 4500s = exactly sleepEnd - sleepStart
-        assertEquals("rem", BedSideHandler.currentSleepStage(session,
+        assertEquals("rem", org.openhab.binding.eightsleep.internal.sleep.SleepSession.currentStage(session,
                 Instant.parse("2026-08-23T06:15:00Z")));
     }
 
     @Test
     public void noStageBeforeSleepStart() {
         var session = JsonParser.parseString(STAGE_SESSION).getAsJsonObject();
-        assertNull(BedSideHandler.currentSleepStage(session,
+        assertNull(org.openhab.binding.eightsleep.internal.sleep.SleepSession.currentStage(session,
                 Instant.parse("2026-08-23T04:30:00Z")));
     }
 
@@ -157,18 +157,18 @@ public class BedSideLogicTest {
 
     @Test
     public void nullLastUpdatedMeansStale() {
-        assertTrue(BedSideHandler.isUserDataStale(null, STALE_NOW, 30));
+        assertTrue(org.openhab.binding.eightsleep.internal.sleep.DataFreshness.isStale(null, STALE_NOW, 30));
     }
 
     @Test
     public void freshDataInsideThreshold() {
         // default interval 30s -> threshold 120s; strictly inside is fresh
         Instant lastUpdate = STALE_NOW.minusSeconds(119);
-        assertFalse(BedSideHandler.isUserDataStale(lastUpdate, STALE_NOW, 30));
+        assertFalse(org.openhab.binding.eightsleep.internal.sleep.DataFreshness.isStale(lastUpdate, STALE_NOW, 30));
         // exactly at the threshold (age == 120s) data is still fresh - only a value
         // OLDER than lastUpdated + threshold counts as stale (strict isBefore)
-        assertFalse(BedSideHandler.isUserDataStale(STALE_NOW.minusSeconds(120), STALE_NOW, 30));
-        assertTrue(BedSideHandler.isUserDataStale(STALE_NOW.minusSeconds(121), STALE_NOW, 30));
+        assertFalse(org.openhab.binding.eightsleep.internal.sleep.DataFreshness.isStale(STALE_NOW.minusSeconds(120), STALE_NOW, 30));
+        assertTrue(org.openhab.binding.eightsleep.internal.sleep.DataFreshness.isStale(STALE_NOW.minusSeconds(121), STALE_NOW, 30));
     }
 
     @Test
@@ -176,56 +176,56 @@ public class BedSideLogicTest {
         // interval 600s -> threshold 2400s; 2000s old is still fresh there,
         // while the same age would be stale for the default interval
         Instant lastUpdate = STALE_NOW.minusSeconds(2000);
-        assertFalse(BedSideHandler.isUserDataStale(lastUpdate, STALE_NOW, 600));
-        assertTrue(BedSideHandler.isUserDataStale(lastUpdate, STALE_NOW, 30));
+        assertFalse(org.openhab.binding.eightsleep.internal.sleep.DataFreshness.isStale(lastUpdate, STALE_NOW, 600));
+        assertTrue(org.openhab.binding.eightsleep.internal.sleep.DataFreshness.isStale(lastUpdate, STALE_NOW, 30));
     }
 
     @Test
     public void smallIntervalUsesSixtySecondFloor() {
         // clamped minimum interval 15s -> 4x = 60s; a value older than that is stale
         Instant lastUpdate = STALE_NOW.minusSeconds(61);
-        assertTrue(BedSideHandler.isUserDataStale(lastUpdate, STALE_NOW, 15));
-        assertFalse(BedSideHandler.isUserDataStale(STALE_NOW.minusSeconds(59), STALE_NOW, 15));
+        assertTrue(org.openhab.binding.eightsleep.internal.sleep.DataFreshness.isStale(lastUpdate, STALE_NOW, 15));
+        assertFalse(org.openhab.binding.eightsleep.internal.sleep.DataFreshness.isStale(STALE_NOW.minusSeconds(59), STALE_NOW, 15));
     }
 
     // ==================== resolveShownTargetLevel ====================
 
     @Test
     public void meaningfulRawLevelsAlwaysShown() {
-        assertEquals(-41.0, BedSideHandler.resolveShownTargetLevel(-41, false, -20.0), 1e-9);
-        assertEquals(35.0, BedSideHandler.resolveShownTargetLevel(35, true, null), 1e-9);
+        assertEquals(-41.0, BedSideChannelSync.resolveShownTargetLevel(-41, false, -20.0), 1e-9);
+        assertEquals(35.0, BedSideChannelSync.resolveShownTargetLevel(35, true, null), 1e-9);
     }
 
     /** The meaningless off-state zero holds the last meaningful level instead. */
     @Test
     public void offStateZeroHoldsPreviousTarget() {
-        assertEquals(-41.0, BedSideHandler.resolveShownTargetLevel(0, false, -41.0), 1e-9);
+        assertEquals(-41.0, BedSideChannelSync.resolveShownTargetLevel(0, false, -41.0), 1e-9);
         // and it keeps holding across repeated off polls
-        assertEquals(-41.0, BedSideHandler.resolveShownTargetLevel(0, false, -41.0), 1e-9);
+        assertEquals(-41.0, BedSideChannelSync.resolveShownTargetLevel(0, false, -41.0), 1e-9);
     }
 
     /** A commanded neutral 0 with the heating flag set is genuine and wins. */
     @Test
     public void commandedNeutralZeroWithHeatingWins() {
-        assertEquals(0.0, BedSideHandler.resolveShownTargetLevel(0, true, -41.0), 1e-9);
+        assertEquals(0.0, BedSideChannelSync.resolveShownTargetLevel(0, true, -41.0), 1e-9);
     }
 
     /** First poll ever reporting an off-state 0 has nothing to hold - shows 0. */
     @Test
     public void firstPollOffStateZeroShowsZero() {
-        assertEquals(0.0, BedSideHandler.resolveShownTargetLevel(0, false, null), 1e-9);
+        assertEquals(0.0, BedSideChannelSync.resolveShownTargetLevel(0, false, null), 1e-9);
     }
 
     @Test
     public void noStageWithoutLiveSessionOrData() {
         Instant now = Instant.parse("2026-08-23T05:10:00Z");
-        assertNull(BedSideHandler.currentSleepStage(null, now));
+        assertNull(org.openhab.binding.eightsleep.internal.sleep.SleepSession.currentStage(null, now));
         // session without stages array or sleep boundaries
-        assertNull(BedSideHandler.currentSleepStage(
+        assertNull(org.openhab.binding.eightsleep.internal.sleep.SleepSession.currentStage(
                 JsonParser.parseString("{}").getAsJsonObject(), now));
-        assertNull(BedSideHandler.currentSleepStage(
+        assertNull(org.openhab.binding.eightsleep.internal.sleep.SleepSession.currentStage(
                 JsonParser.parseString("{\"sleepStart\":\"2026-08-23T05:00:00Z\"}").getAsJsonObject(), now));
-        assertNull(BedSideHandler.currentSleepStage(
+        assertNull(org.openhab.binding.eightsleep.internal.sleep.SleepSession.currentStage(
                 JsonParser.parseString(
                         "{\"sleepStart\":\"2026-08-23T05:00:00Z\",\"sleepEnd\":\"2026-08-23T06:15:00Z\",\"stages\":[]}")
                         .getAsJsonObject(), now));
@@ -238,7 +238,7 @@ public class BedSideLogicTest {
         var session = JsonParser.parseString(STAGE_SESSION).getAsJsonObject();
         assertFalse("fixture shape must not rely on a processing field",
                 session.has("processing"));
-        assertEquals("awake", BedSideHandler.currentSleepStage(session,
+        assertEquals("awake", org.openhab.binding.eightsleep.internal.sleep.SleepSession.currentStage(session,
                 Instant.parse("2026-08-23T05:05:00Z")));
     }
 
@@ -250,42 +250,42 @@ public class BedSideLogicTest {
     @Test
     public void freshHeartbeatMeansPresent() {
         var session = JsonParser.parseString(String.format(HR_SESSION, "2026-08-23T05:59:00Z")).getAsJsonObject();
-        assertTrue(BedSideHandler.isPresent(session, NOW));
+        assertTrue(org.openhab.binding.eightsleep.internal.sleep.SleepSession.isPresent(session, NOW));
     }
 
     @Test
     public void staleHeartbeatMeansAbsent() {
         var session = JsonParser.parseString(String.format(HR_SESSION, "2026-08-23T04:00:00Z")).getAsJsonObject();
-        assertFalse(BedSideHandler.isPresent(session, NOW));
+        assertFalse(org.openhab.binding.eightsleep.internal.sleep.SleepSession.isPresent(session, NOW));
     }
 
     /** Future timestamps are tolerated (device clock skew) thanks to abs(). */
     @Test
     public void slightlyFutureTimestampStillPresent() {
         var session = JsonParser.parseString(String.format(HR_SESSION, "2026-08-23T06:02:00Z")).getAsJsonObject();
-        assertTrue(BedSideHandler.isPresent(session, NOW));
+        assertTrue(org.openhab.binding.eightsleep.internal.sleep.SleepSession.isPresent(session, NOW));
     }
 
     @Test
     public void missingSeriesOrGarbageIsAbsent() {
-        assertFalse(BedSideHandler.isPresent(null, NOW));
-        assertFalse(BedSideHandler.isPresent(JsonParser.parseString("{}").getAsJsonObject(), NOW));
-        assertFalse(BedSideHandler.isPresent(
+        assertFalse(org.openhab.binding.eightsleep.internal.sleep.SleepSession.isPresent(null, NOW));
+        assertFalse(org.openhab.binding.eightsleep.internal.sleep.SleepSession.isPresent(JsonParser.parseString("{}").getAsJsonObject(), NOW));
+        assertFalse(org.openhab.binding.eightsleep.internal.sleep.SleepSession.isPresent(
                 JsonParser.parseString("{\"timeseries\":{\"heartRate\":[]}}").getAsJsonObject(), NOW));
-        assertFalse(BedSideHandler.isPresent(
+        assertFalse(org.openhab.binding.eightsleep.internal.sleep.SleepSession.isPresent(
                 JsonParser.parseString("""
                         {"timeseries":{"heartRate":[["garbage",5]]}}""").getAsJsonObject(), NOW));
     }
 
-    /** Exactly PRESENCE_FRESH_SECONDS old is already stale (strict <). */
+    /** Exactly SleepSession.PRESENCE_FRESH_SECONDS old is already stale (strict <). */
     @Test
     public void heartbeatAtExactFreshnessBoundaryIsAbsent() {
         // NOW = 2026-08-23T06:00:00Z, so exactly 600 s old is 05:50:00Z
         var boundary = JsonParser.parseString(String.format(HR_SESSION, "2026-08-23T05:50:00Z")).getAsJsonObject();
-        assertFalse("600s is not < 600s", BedSideHandler.isPresent(boundary, NOW));
+        assertFalse("600s is not < 600s", org.openhab.binding.eightsleep.internal.sleep.SleepSession.isPresent(boundary, NOW));
         // one second inside the window is present
         var fresh = JsonParser.parseString(String.format(HR_SESSION, "2026-08-23T05:59:00Z")).getAsJsonObject();
-        assertTrue(BedSideHandler.isPresent(fresh, NOW));
+        assertTrue(org.openhab.binding.eightsleep.internal.sleep.SleepSession.isPresent(fresh, NOW));
     }
 
     /**
@@ -295,13 +295,13 @@ public class BedSideLogicTest {
     @Test
     public void malformedEntryTypesDoNotThrow() {
         // object where the timestamp element should be
-        assertFalse(BedSideHandler.isPresent(JsonParser.parseString(
+        assertFalse(org.openhab.binding.eightsleep.internal.sleep.SleepSession.isPresent(JsonParser.parseString(
                 "{\"timeseries\":{\"heartRate\":[[{\"bad\":1},62]]}}").getAsJsonObject(), NOW));
         // non-array entry entirely
-        assertFalse(BedSideHandler.isPresent(JsonParser.parseString(
+        assertFalse(org.openhab.binding.eightsleep.internal.sleep.SleepSession.isPresent(JsonParser.parseString(
                 "{\"timeseries\":{\"heartRate\":[{\"weird\":true}]}}").getAsJsonObject(), NOW));
         // numeric "timestamp"
-        assertFalse(BedSideHandler.isPresent(JsonParser.parseString(
+        assertFalse(org.openhab.binding.eightsleep.internal.sleep.SleepSession.isPresent(JsonParser.parseString(
                 "{\"timeseries\":{\"heartRate\":[[123456,62]]}}").getAsJsonObject(), NOW));
     }
 
@@ -309,32 +309,31 @@ public class BedSideLogicTest {
 
     @Test
     public void heatingStateFollowsTargetLevelSign() {
-        assertEquals("heating", BedSideHandler.deriveHeatingState(true, 50));
-        assertEquals("cooling", BedSideHandler.deriveHeatingState(true, -50));
+        assertEquals("heating", BedSideChannelSync.deriveHeatingState(true, 50));
+        assertEquals("cooling", BedSideChannelSync.deriveHeatingState(true, -50));
         // level 0 is neutral (27 C): actively tracking it is neither direction
-        assertEquals("idle", BedSideHandler.deriveHeatingState(true, 0));
-        assertEquals("idle", BedSideHandler.deriveHeatingState(false, 80));
-        assertEquals("idle", BedSideHandler.deriveHeatingState(false, -80));
+        assertEquals("idle", BedSideChannelSync.deriveHeatingState(true, 0));
+        assertEquals("idle", BedSideChannelSync.deriveHeatingState(false, 80));
+        assertEquals("idle", BedSideChannelSync.deriveHeatingState(false, -80));
     }
 
     // ==================== acceptsPolledAway ====================
 
     @Test
     public void noPriorCommandAcceptsAnyPoll() {
-        assertTrue(AccountHandler.acceptsPolledAway(null, NOW));
+        assertTrue(AwayModeTracker.acceptsPolledAway(null, NOW));
     }
 
-    /** A poll observed before the command always loses; the grace window table is exact. */
+    /** A poll started after the command is newer information, even 1 s later. */
     @Test
-    public void pollInsideGraceWindowRejected() {
+    public void pollStartedAfterCommandAccepted() {
         Instant commandAt = NOW;
-        assertFalse("poll observed within the grace window is pre-command data",
-                AccountHandler.acceptsPolledAway(commandAt, commandAt.plusSeconds(1)));
-        assertTrue("at the window end the server value wins again",
-                AccountHandler.acceptsPolledAway(commandAt, commandAt.plusSeconds(2)));
-        assertTrue(AccountHandler.acceptsPolledAway(commandAt, commandAt.plusSeconds(3)));
-        assertFalse("poll observed BEFORE command always rejected",
-                AccountHandler.acceptsPolledAway(commandAt, commandAt.minusSeconds(60)));
+        assertTrue("post-command polls are server truth",
+                AwayModeTracker.acceptsPolledAway(commandAt, commandAt.plusSeconds(1)));
+        assertTrue(AwayModeTracker.acceptsPolledAway(commandAt, commandAt.plusNanos(1)));
+        assertTrue(AwayModeTracker.acceptsPolledAway(commandAt, commandAt.plusSeconds(60)));
+        assertFalse("a poll started before the command is pre-command data",
+                AwayModeTracker.acceptsPolledAway(commandAt, commandAt.minusSeconds(60)));
     }
 
     // ==================== autopilotTargetLevel / shouldClearAlarmChannels ====================
@@ -343,35 +342,35 @@ public class BedSideLogicTest {
     public void autopilotTargetReadFromSmartSchedule() {
         var temp = JsonParser.parseString(
                 "{\"smart\":{\"bedTimeLevel\":-32,\"finalSleepLevel\":-12}}").getAsJsonObject();
-        assertEquals(Double.valueOf(-32), BedSideHandler.autopilotTargetLevel(temp));
+        assertEquals(Double.valueOf(-32), BedSideChannelSync.autopilotTargetLevel(temp));
 
         // missing/blank payloads degrade to null instead of throwing
-        assertNull(BedSideHandler.autopilotTargetLevel(null));
-        assertNull(BedSideHandler.autopilotTargetLevel(JsonParser.parseString("{}").getAsJsonObject()));
-        assertNull(BedSideHandler.autopilotTargetLevel(
+        assertNull(BedSideChannelSync.autopilotTargetLevel(null));
+        assertNull(BedSideChannelSync.autopilotTargetLevel(JsonParser.parseString("{}").getAsJsonObject()));
+        assertNull(BedSideChannelSync.autopilotTargetLevel(
                 JsonParser.parseString("{\"smart\":\"junk\"}").getAsJsonObject()));
     }
 
     @Test
     public void alarmChannelsNeverClearedWhileAlarmSelected() {
         // a selected alarm always wins - nothing is cleared regardless of freshness
-        assertFalse(BedSideHandler.shouldClearAlarmChannels(true, 0, null, STALE_NOW, 30));
-        assertFalse(BedSideHandler.shouldClearAlarmChannels(true, 5, STALE_NOW, STALE_NOW, 30));
+        assertFalse(org.openhab.binding.eightsleep.internal.alarm.AlarmSelector.shouldClearAlarmChannels(true, 0, null, STALE_NOW, 30));
+        assertFalse(org.openhab.binding.eightsleep.internal.alarm.AlarmSelector.shouldClearAlarmChannels(true, 5, STALE_NOW, STALE_NOW, 30));
     }
 
     @Test
     public void freshEmptyPollClearsStaleAlarmEntries() {
         // no selection, no entries, but a recent successful (empty) poll -> clear
-        assertTrue(BedSideHandler.shouldClearAlarmChannels(false, 0, STALE_NOW, STALE_NOW, 30));
+        assertTrue(org.openhab.binding.eightsleep.internal.alarm.AlarmSelector.shouldClearAlarmChannels(false, 0, STALE_NOW, STALE_NOW, 30));
     }
 
     @Test
     public void staleLeftoverEntriesAreClearedEvenWithoutFreshPoll() {
         // leftover published values from a since-removed alarm must not linger forever
         Instant old = STALE_NOW.minusSeconds(3600);
-        assertTrue(BedSideHandler.shouldClearAlarmChannels(false, 3, old, STALE_NOW, 30));
+        assertTrue(org.openhab.binding.eightsleep.internal.alarm.AlarmSelector.shouldClearAlarmChannels(false, 3, old, STALE_NOW, 30));
         // and with neither entries nor a fresh poll there is nothing to act on
-        assertFalse(BedSideHandler.shouldClearAlarmChannels(false, 0, old, STALE_NOW, 30));
-        assertFalse(BedSideHandler.shouldClearAlarmChannels(false, 0, null, STALE_NOW, 30));
+        assertFalse(org.openhab.binding.eightsleep.internal.alarm.AlarmSelector.shouldClearAlarmChannels(false, 0, old, STALE_NOW, 30));
+        assertFalse(org.openhab.binding.eightsleep.internal.alarm.AlarmSelector.shouldClearAlarmChannels(false, 0, null, STALE_NOW, 30));
     }
 }

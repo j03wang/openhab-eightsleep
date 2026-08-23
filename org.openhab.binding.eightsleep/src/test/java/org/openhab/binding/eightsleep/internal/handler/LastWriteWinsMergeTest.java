@@ -21,7 +21,8 @@ import java.time.Instant;
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 import org.junit.Test;
-import org.openhab.binding.eightsleep.internal.handler.BedSideHandler.CommandedValue;
+import org.openhab.binding.eightsleep.internal.handler.LastWriteWins;
+import org.openhab.binding.eightsleep.internal.handler.LastWriteWins.CommandedValue;
 
 /**
  * Regression tests for the last-write-wins merge used by every mutable channel
@@ -43,14 +44,14 @@ public class LastWriteWinsMergeTest {
     private static final Instant T0 = Instant.parse("2026-08-22T15:00:00Z");
     private static final Instant T1 = Instant.parse("2026-08-22T15:01:00Z");
 
-    private static BedSideHandler.@Nullable CommandedValue cmd(Instant at, boolean on) {
-        return new BedSideHandler.CommandedValue(at, on);
+    private static @Nullable CommandedValue cmd(Instant at, boolean on) {
+        return new CommandedValue(at, on);
     }
 
-    /** Mirrors the resolver in BedSideHandler. */
+    /** Delegates to the extracted resolver. */
     private static @Nullable Boolean resolve(Boolean polledOn, @Nullable Instant polledAt,
             @Nullable CommandedValue commanded) {
-        return BedSideHandler.resolveLatest(polledOn, polledAt, commanded);
+        return LastWriteWins.resolveLatest(polledOn, polledAt, commanded);
     }
 
     @Test
@@ -99,15 +100,15 @@ public class LastWriteWinsMergeTest {
     @Test
     public void commandRetiredOnlyWhenPolledValueConfirms() {
         // server confirmed: polled agrees with resolved -> retire
-        assertTrue(BedSideHandler.shouldRetireCommand(true, true));
-        assertTrue(BedSideHandler.shouldRetireCommand(false, false));
+        assertTrue(LastWriteWins.shouldRetireCommand(true, true));
+        assertTrue(LastWriteWins.shouldRetireCommand(false, false));
 
         // command beat a contradicting (stale) poll -> keep waiting for confirmation
-        assertFalse(BedSideHandler.shouldRetireCommand(true, false));
-        assertFalse(BedSideHandler.shouldRetireCommand(false, true));
+        assertFalse(LastWriteWins.shouldRetireCommand(true, false));
+        assertFalse(LastWriteWins.shouldRetireCommand(false, true));
 
         // nothing polled yet -> nothing to confirm against
-        assertFalse(BedSideHandler.shouldRetireCommand(null, true));
-        assertFalse(BedSideHandler.shouldRetireCommand(null, null));
+        assertFalse(LastWriteWins.shouldRetireCommand(null, true));
+        assertFalse(LastWriteWins.shouldRetireCommand(null, null));
     }
 }

@@ -24,6 +24,8 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.junit.Test;
 import org.openhab.binding.eightsleep.internal.api.EightSleepApiClient;
 import org.openhab.binding.eightsleep.internal.api.TokenManager;
+import org.openhab.binding.eightsleep.internal.model.AccountConfigParser;
+import org.openhab.binding.eightsleep.internal.model.UserDataCache;
 import org.openhab.core.thing.Bridge;
 
 import static org.junit.Assert.assertNotNull;
@@ -40,46 +42,80 @@ import static org.mockito.Mockito.mock;
 @NonNullByDefault
 public class AccountLwwLogicTest {
 
-    // ==================== acceptsPolledAway boundary table ====================
+    // ==================== acceptsPolledAway ordering table ====================
 
     @Test
-    public void awayGraceWindowTable() {
-        Instant t0 = Instant.parse("2026-08-22T15:00:00Z");
+    public void awayPollOrderingTable() {
+        Instant commandAt = Instant.parse("2026-08-22T15:00:00Z");
 
         // no command -> always accept
-        assertTrue(AccountHandler.acceptsPolledAway(null, t0));
-        assertTrue(AccountHandler.acceptsPolledAway(null, t0.plusSeconds(600)));
+        assertTrue(AwayModeTracker.acceptsPolledAway(null, commandAt));
+        assertTrue(AwayModeTracker.acceptsPolledAway(null, commandAt.plusSeconds(600)));
 
-        // poll observed before the grace window end is pre-command data
-        assertFalse(AccountHandler.acceptsPolledAway(t0, t0));
-        assertFalse(AccountHandler.acceptsPolledAway(t0, t0.plusSeconds(1)));
-        // exactly at the window end the server value wins again
-        assertTrue(AccountHandler.acceptsPolledAway(t0, t0.plusSeconds(AccountHandler.AWAY_COMMAND_GRACE_SECONDS)));
-        assertTrue(AccountHandler.acceptsPolledAway(t0, t0.plusSeconds(60)));
+        // a poll that STARTED before the command carries pre-command data: rejected.
+        // An exact tie follows the LWW convention - ties go to the polled value.
+        assertFalse(AwayModeTracker.acceptsPolledAway(commandAt, commandAt.minusSeconds(60)));
+        assertTrue(AwayModeTracker.acceptsPolledAway(commandAt, commandAt));
+        // a poll started after the command is newer information: accepted - even if it
+        // still reports the old value, because that is server truth (not yet applied,
+        // or changed back from elsewhere)
+        assertTrue(AwayModeTracker.acceptsPolledAway(commandAt, commandAt.plusSeconds(1)));
+        assertTrue(AwayModeTracker.acceptsPolledAway(commandAt, commandAt.plusNanos(1)));
     }
 
     // ==================== clampInterval ====================
 
     @Test
     public void intervalClamping() {
-        assertEquals(15, AccountHandler.clampInterval(1, 15, 600));
-        assertEquals(600, AccountHandler.clampInterval(99999, 15, 600));
-        assertEquals(60, AccountHandler.clampInterval(60, 15, 600));
-        assertEquals(15, AccountHandler.clampInterval(15, 15, 600));
+        assertEquals(15, AccountConfigParser.clampInterval(1, 15, 600));
+        assertEquals(600, AccountConfigParser.clampInterval(99999, 15, 600));
+        assertEquals(60, AccountConfigParser.clampInterval(60, 15, 600));
+        assertEquals(15, AccountConfigParser.clampInterval(15, 15, 600));
     }
 
     // ==================== parseTemperatureUnit ====================
 
     @Test
     public void unitParsing() {
-        assertEquals('f', AccountHandler.parseTemperatureUnit("F", 'c'));
-        assertEquals('f', AccountHandler.parseTemperatureUnit(" fahrenheit ", 'c'));
-        assertEquals('c', AccountHandler.parseTemperatureUnit("C", 'x'));
-        assertEquals('c', AccountHandler.parseTemperatureUnit("celsius", 'c'));
-        assertEquals('k', AccountHandler.parseTemperatureUnit("", 'k'));
-        assertEquals('k', AccountHandler.parseTemperatureUnit("   ", 'k'));
-        assertEquals('k', AccountHandler.parseTemperatureUnit("kelvin", 'k'));
-        assertEquals('c', AccountHandler.parseTemperatureUnit("42", 'c'));
+        assertEquals('f', AccountConfigParser.parseTemperatureUnit("F", 'c'));
+        assertEquals('f', AccountConfigParser.parseTemperatureUnit(" fahrenheit ", 'c'));
+        assertEquals('c', AccountConfigParser.parseTemperatureUnit("C", 'x'));
+        assertEquals('c', AccountConfigParser.parseTemperatureUnit("celsius", 'c'));
+        assertEquals('k', AccountConfigParser.parseTemperatureUnit("", 'k'));
+        assertEquals('k', AccountConfigParser.parseTemperatureUnit("   ", 'k'));
+        assertEquals('k', AccountConfigParser.parseTemperatureUnit("kelvin", 'k'));
+        assertEquals('c', AccountConfigParser.parseTemperatureUnit("42", 'c'));
+    }
+
+    // ==================== chooseDeviceId ====================
+
+    private static final org.slf4j.Logger LOG =
+            org.slf4j.LoggerFactory.getLogger(AccountLwwLogicTest.class);
+
+    @Test
+    public void configuredDevicePreferredWhenKnown() {
+        var devices = new java.util.LinkedHashMap<>(java.util.Map.of(
+                "dev_b", "B", "dev_a", "A"));
+        assertEquals("dev_a", AccountHandler.chooseDeviceId(devices, "dev_a", LOG));
+    }
+
+    /** Unknown configured id falls back to the first sorted device (stable across restarts). */
+    @Test
+    public void unknownConfiguredDeviceFallsBackToFirstSorted() {
+        var devices = new java.util.LinkedHashMap<>(java.util.Map.of(
+                "dev_z", "Z", "dev_a", "A"));
+        assertEquals("dev_a", AccountHandler.chooseDeviceId(devices, "ghost", LOG));
+    }
+
+    /** Blank/null configuration picks the first device in sorted order, not encounter order. */
+    @Test
+    public void blankConfigurationPicksFirstSorted() {
+        var devices = new java.util.LinkedHashMap<>(java.util.Map.of(
+                "dev_z", "Z", "dev_a", "A"));
+        assertEquals("dev_a", AccountHandler.chooseDeviceId(devices, "", LOG));
+        assertEquals("dev_a", AccountHandler.chooseDeviceId(devices, null, LOG));
+        // whitespace-only config is treated like blank
+        assertEquals("dev_a", AccountHandler.chooseDeviceId(devices, "  ", LOG));
     }
 
     // ==================== registration counting on the REAL handler ====================

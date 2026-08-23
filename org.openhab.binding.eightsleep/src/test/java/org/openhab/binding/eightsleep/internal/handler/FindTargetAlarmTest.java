@@ -23,7 +23,9 @@ import java.time.ZoneId;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.junit.Test;
+import org.openhab.binding.eightsleep.internal.alarm.AlarmSelector;
 import org.openhab.binding.eightsleep.internal.api.EightSleepApiClient;
+import org.openhab.binding.eightsleep.internal.model.UserDataCache;
 
 import com.google.gson.Gson;
 
@@ -53,13 +55,13 @@ public class FindTargetAlarmTest {
 
     @Test
     public void noAlarmsYieldsNull() {
-        assertNull(FindTargetAlarmBridge.find(new AccountHandler.UserData(), NOW));
+        assertNull(FindTargetAlarmBridge.find(new UserDataCache(), NOW));
     }
 
     /** Alarms whose schedule cannot be computed are excluded from selection. */
     @Test
     public void uncomputableAlarmsExcluded() {
-        AccountHandler.UserData userData = new AccountHandler.UserData();
+        UserDataCache userData = new UserDataCache();
         userData.alarms.add(alarm("a1", null, "{\"enabled\":true,\"weekDays\":{}}")); // no time -> null run
         userData.alarms.add(alarm("a2", "bogus", "{\"enabled\":true,\"weekDays\":{}}")); // bad time -> null run
         assertNull(FindTargetAlarmBridge.find(userData, NOW));
@@ -68,7 +70,7 @@ public class FindTargetAlarmTest {
     /** Equal computed runs break the tie on the smaller id, regardless of list order. */
     @Test
     public void equalRunsTieBreakOnSmallestId() {
-        AccountHandler.UserData userData = new AccountHandler.UserData();
+        UserDataCache userData = new UserDataCache();
         userData.alarms.add(alarm("bbb", "07:00:00", "{\"enabled\":true,\"weekDays\":{}}"));
         userData.alarms.add(alarm("aaa", "07:00:00", "{\"enabled\":true,\"weekDays\":{}}"));
         var target = FindTargetAlarmBridge.find(userData, NOW);
@@ -79,7 +81,7 @@ public class FindTargetAlarmTest {
     /** An alarm with a null id must not win a tie (cannot be toggled anyway). */
     @Test
     public void nullIdLosesTie() {
-        AccountHandler.UserData userData = new AccountHandler.UserData();
+        UserDataCache userData = new UserDataCache();
         userData.alarms.add(alarm(null, "07:00:00", "{\"enabled\":true,\"weekDays\":{}}"));
         userData.alarms.add(alarm("zzz", "07:00:00", "{\"enabled\":true,\"weekDays\":{}}"));
         var target = FindTargetAlarmBridge.find(userData, NOW);
@@ -94,7 +96,7 @@ public class FindTargetAlarmTest {
      */
     @Test
     public void soonerRunWinsRegardlessOfOrder() {
-        AccountHandler.UserData userData = new AccountHandler.UserData();
+        UserDataCache userData = new UserDataCache();
         userData.alarms.add(alarm("later", "09:00:00", "{\"enabled\":true,\"weekDays\":{}}"));
         userData.alarms.add(alarm("sooner", "05:15:00", "{\"enabled\":true,\"weekDays\":{}}"));
         var target = FindTargetAlarmBridge.find(userData, NOW);
@@ -116,11 +118,11 @@ public class FindTargetAlarmTest {
      * Always passes the FIXED zone - never the system default.
      */
     private static final class FindTargetAlarmBridge {
-        static EightSleepApiClient.@org.eclipse.jdt.annotation.Nullable Alarm find(AccountHandler.UserData userData,
+        static EightSleepApiClient.@org.eclipse.jdt.annotation.Nullable Alarm find(UserDataCache userData,
                 Instant now) {
-            EightSleepApiClient.Alarm result = BedSideHandler.findTargetAlarm(userData, now, ZONE);
+            EightSleepApiClient.Alarm result = AlarmSelector.findTargetAlarm(userData, now, ZONE);
             assertFalse("selection must be stable across repeated calls",
-                    !resultEquals(result, BedSideHandler.findTargetAlarm(userData, now, ZONE)));
+                    !resultEquals(result, AlarmSelector.findTargetAlarm(userData, now, ZONE)));
             return result;
         }
 

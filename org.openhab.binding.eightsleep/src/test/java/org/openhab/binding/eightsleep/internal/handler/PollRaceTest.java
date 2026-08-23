@@ -19,7 +19,8 @@ import java.time.Instant;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.junit.Test;
-import org.openhab.binding.eightsleep.internal.handler.BedSideHandler.CommandedValue;
+import org.openhab.binding.eightsleep.internal.handler.LastWriteWins;
+import org.openhab.binding.eightsleep.internal.handler.LastWriteWins.CommandedValue;
 
 /**
  * Regression for the poll/command race: a poll that STARTED before a command but
@@ -42,7 +43,7 @@ public class PollRaceTest {
 
         // stale pre-command data says ON, the command turned the side OFF:
         // only a correct LWW resolution keeps OFF.
-        Boolean resolved = BedSideHandler.resolveLatest(
+        Boolean resolved = LastWriteWins.resolveLatest(
                 true /* stale pre-command data */, pollStarted, new CommandedValue(commandAt, false));
         assertFalse("commanded OFF must survive the in-flight poll", resolved);
     }
@@ -55,7 +56,7 @@ public class PollRaceTest {
 
         // the command said ON, but the server now reports OFF (e.g. app-side change):
         // only a correct LWW resolution follows the fresh poll.
-        Boolean resolved = BedSideHandler.resolveLatest(
+        Boolean resolved = LastWriteWins.resolveLatest(
                 false /* server now reflects app-side change */, pollStartedAfter,
                 new CommandedValue(commandAt, true));
         assertFalse(resolved);

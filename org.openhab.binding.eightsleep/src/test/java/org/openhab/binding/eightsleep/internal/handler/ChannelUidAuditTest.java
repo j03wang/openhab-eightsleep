@@ -22,6 +22,7 @@ import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -53,6 +54,9 @@ public class ChannelUidAuditTest {
             .resolve("src/main/java/org/openhab/binding/eightsleep/internal/EightSleepBindingConstants.java");
     private static final Path HANDLER_DIR = MODULE_DIR
             .resolve("src/main/java/org/openhab/binding/eightsleep/internal/handler");
+    /** Channel publishes also flow through the pure sync resolver. */
+    private static final Path SYNC_DIR = MODULE_DIR
+            .resolve("src/main/java/org/openhab/binding/eightsleep/internal");
 
     /** group#channel UIDs declared on the bedSide thing type. */
     private static Set<String> declaredUids(String xml) {
@@ -96,6 +100,7 @@ public class ChannelUidAuditTest {
 
     /** All java files under the internal/handler package. */
     private Stream<Path> handlerSources() throws IOException {
+        // handler package plus the sync resolver (which now builds the channel states)
         try (Stream<Path> stream = Files.walk(HANDLER_DIR)) {
             return stream.filter(p -> p.toString().endsWith(".java"))
                     .collect(java.util.stream.Collectors.toList()).stream();
@@ -118,7 +123,11 @@ public class ChannelUidAuditTest {
         int checked = 0;
 
         try (Stream<Path> files = handlerSources()) {
-            for (Path file : files.toList()) {
+            List<Path> all = new ArrayList<>(files.toList());
+            if (Files.exists(SYNC_DIR.resolve("handler/BedSideChannelSync.java"))) {
+                all.add(SYNC_DIR.resolve("handler/BedSideChannelSync.java"));
+            }
+            for (Path file : all) {
                 String source = Files.readString(file, StandardCharsets.UTF_8);
                 // 1) direct updateState(GROUP_x#CHANNEL_y, ...) calls
                 Matcher m = Pattern.compile(
@@ -132,7 +141,7 @@ public class ChannelUidAuditTest {
 
                 // 2) helper-mediated publishes: putDecimal/putDuration(group, channel, ...)
                 Matcher twoArg = Pattern.compile(
-                        "(?:putDecimal|putDuration)\\(\\s*(GROUP_\\w+)\\s*,\\s*(CHANNEL_\\w+)",
+"(?:putDecimal|putDuration|add|addQuantity)\\(\\s*(?:r\\s*,\\s*)?(GROUP_\\w+)\\s*,\\s*(CHANNEL_\\w+)",
                         Pattern.DOTALL).matcher(source);
                 while (twoArg.find()) {
                     checked++;
@@ -141,7 +150,7 @@ public class ChannelUidAuditTest {
 
                 // 3) putLatest/putLatestCelsius(session, "series", group, channel)
                 Matcher fourArg = Pattern.compile(
-                        "putLatest(?:Celsius)?\\(\\w+\\s*,\\s*\"[^\"]*\"\\s*,\\s*(GROUP_\\w+)\\s*,\\s*(CHANNEL_\\w+)",
+"putLatest(?:Celsius)?\\(\\s*(?:r\\s*,\\s*)?\\w+\\s*,\\s*\"[^\"]*\"\\s*,\\s*(GROUP_\\w+)\\s*,\\s*(CHANNEL_\\w+)",
                         Pattern.DOTALL).matcher(source);
                 while (fourArg.find()) {
                     checked++;

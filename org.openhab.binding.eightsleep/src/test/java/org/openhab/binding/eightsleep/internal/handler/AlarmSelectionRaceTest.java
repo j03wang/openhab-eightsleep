@@ -22,7 +22,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.junit.Test;
+import org.openhab.binding.eightsleep.internal.alarm.AlarmSelector;
 import org.openhab.binding.eightsleep.internal.api.EightSleepApiClient;
+import org.openhab.binding.eightsleep.internal.model.UserDataCache;
 
 /**
  * Reproduces the exact production timeline from 2026-08-22 21:43:
@@ -69,7 +71,7 @@ public class AlarmSelectionRaceTest {
     public void productionTimeline_selectionStaysOnNewlyDisabledAlarm() {
         // state BEFORE: weekday alarm enabled (next run Mon 2026-08-24T12:15Z),
         // weekend alarm disabled by the earlier session (no nextTimestamp yet)
-        AccountHandler.UserData userData = new AccountHandler.UserData();
+        UserDataCache userData = new UserDataCache();
         userData.alarms.add(alarm("b7fbf288", "05:15:00", true,
                 "{\"monday\":true,\"tuesday\":true,\"wednesday\":true,\"thursday\":true,\"friday\":true}",
                 "2026-08-24T12:15:00Z"));
@@ -87,7 +89,7 @@ public class AlarmSelectionRaceTest {
         // selection BEFORE disable: weekend fires tomorrow (Sun 07:00 PT) vs weekday
         // Monday 05:15 -> weekend selected
         assertEquals("6bd72e29",
-                BedSideHandler.findTargetAlarm(userData, now, incidentZone).id);
+                AlarmSelector.findTargetAlarm(userData, now, incidentZone).id);
 
         // user disables the WEEKEND alarm via OH; server clears its nextTimestamp,
         // but our computation derives Mon 05:15 from time+weekDays regardless
@@ -98,7 +100,7 @@ public class AlarmSelectionRaceTest {
         // is still sooner than the weekday Mon 05:15, and the switch shows OFF
         // because the alarm is disabled - exactly what the user expects when they
         // turn off their weekend alarm.
-        var target = BedSideHandler.findTargetAlarm(userData, now, incidentZone);
+        var target = AlarmSelector.findTargetAlarm(userData, now, incidentZone);
         assertNotNull(target);
         assertEquals("selection stays on disabled alarm's computed slot",
                 "6bd72e29", target.id);
@@ -113,7 +115,7 @@ public class AlarmSelectionRaceTest {
 
     @Test
     public void twoAlarms_soonestComputedWins_stablyAcrossPolls() {
-        AccountHandler.UserData userData = new AccountHandler.UserData();
+        UserDataCache userData = new UserDataCache();
         // weekend first in list, weekday second - list order must not matter
         userData.alarms.add(alarm("6bd72e29", "07:00:00", false, "{\"saturday\":true,\"sunday\":true}", null));
         userData.alarms.add(alarm("b7fbf288", "05:15:00", true,
@@ -125,8 +127,8 @@ public class AlarmSelectionRaceTest {
         // UTC keeps the expectation valid on any CI runner.)
         Instant now = Instant.parse("2026-08-22T12:00:00Z");
         ZoneId zone = ZoneId.of("UTC");
-        var t1 = BedSideHandler.findTargetAlarm(userData, now, zone);
-        var t2 = BedSideHandler.findTargetAlarm(userData, now, zone);
+        var t1 = AlarmSelector.findTargetAlarm(userData, now, zone);
+        var t2 = AlarmSelector.findTargetAlarm(userData, now, zone);
         assertEquals("selection stable across sync cycles", t1.id, t2.id);
         assertEquals("weekend slot is sooner than the next weekday slot",
                 "6bd72e29", t1.id);
