@@ -228,4 +228,19 @@ public class TrendParser {
             }
         }
     }
-}
+
+    /**
+     * Parses an "HH:mm:ss" time-of-day, tolerating fractional seconds (the first
+     * 8 characters are used) and returning null for blank/malformed input
+     * instead of throwing. Static and unit-testable.
+     */
+    public static java.time.@Nullable LocalTime parseTimeOfDay(@Nullable String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return java.time.LocalTime.parse(value.trim().substring(0, Math.min(8, value.trim().length())));
+        } catch (Exception e) {
+            return null;
+        }
+    }}

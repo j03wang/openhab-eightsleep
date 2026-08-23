@@ -71,26 +71,55 @@ public class BedSideHandler extends BaseThingHandler {
     private final TimeZoneProvider timeZoneProvider;
 
     /** Heart rate data younger than this confirms bed presence. */
-    private static final long PRESENCE_FRESH_SECONDS = 600;
+    static final long PRESENCE_FRESH_SECONDS = 600;
 
     private @Nullable ScheduledFuture<?> refreshJob;
     private String userId = "";
     private String side = "left";
     /** True when one user controls both zones ("Both"/solo bed). */
     private boolean soloBed;
-    /** Timestamp until which commanded power state suppresses stale sync updates. */
-    private volatile long sidePowerOverrideUntil;
+    /**
+     * Last commanded value per channel, kept so the sync loop can do last-write-wins
+     * merging against polled data: whichever was observed more recently wins. Entries
+     * are never expired - a fresh poll simply arrives with a newer timestamp.
+     */
+    private final java.util.concurrent.ConcurrentHashMap<String, CommandedValue> commanded =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
-    /** Grace period for the cloud to reflect a power command. */
-    private static final long POWER_OVERRIDE_MILLIS = 15_000;
+    /** A value written by a channel command, stamped with the command time. */
+    record CommandedValue(Instant at, boolean on) {
+    }
 
-    /** Alarm id whose enabled state we commanded; trusted until the poll confirms. */
-    private volatile @Nullable String pendingAlarmId;
-    private volatile @Nullable Boolean pendingAlarmEnabled;
-    private volatile long alarmOverrideUntil;
+    /**
+     * Last-write-wins merge shared by every mutable channel: whichever observation
+     * was stamped more recently wins; ties go to the polled value (the server is
+     * authoritative). Returns null when no source has spoken.
+     */
+    static @Nullable Boolean resolveLatest(@Nullable Boolean polledOn, @Nullable Instant polledAt,
+            @Nullable CommandedValue commanded) {
+        if (commanded == null) {
+            return polledOn;
+        }
+        if (polledOn == null || polledAt == null) {
+            return commanded.on();
+        }
+        return polledAt.isBefore(commanded.at()) ? commanded.on() : polledOn;
+    }
 
-    /** Grace period for the cloud + one full alarms poll to reflect an update. */
-    private static final long ALARM_OVERRIDE_MILLIS = 45_000;
+    /**
+     * A pending channel command can be dropped once the polled (server) value agrees
+     * with what was published - i.e. the polled value WON the merge and the server
+     * has confirmed the command. When the command merely beat a stale contradicting
+     * poll, the entry must be kept or that stale poll would flicker back next cycle.
+     * Static and unit-testable.
+     */
+    static boolean shouldRetireCommand(@Nullable Boolean polledValue, @Nullable Boolean resolved) {
+        return polledValue != null && polledValue.equals(resolved);
+    }
+
+    /** alarmId -> commanded enabled state, stamped when the command was sent. */
+    private final java.util.concurrent.ConcurrentHashMap<String, CommandedValue> commandedAlarms =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     /** Last known/commandsed raw heating level target, kept for the off-state fallback. */
     private @Nullable Double lastKnownTargetLevel;
@@ -173,6 +202,10 @@ public class BedSideHandler extends BaseThingHandler {
 
     @Override
     public void dispose() {
+        AccountHandler account = getAccountHandler();
+        if (account != null) {
+            account.unregisterBedSide(userId);
+        }
         stopRefreshJob();
         super.dispose();
     }
@@ -272,14 +305,83 @@ public class BedSideHandler extends BaseThingHandler {
 
     private void handleSidePower(EightSleepApiClient client, Command command) throws ApiException {
         boolean turnOn = command == OnOffType.ON;
-        // Optimistic feedback: the cloud applies instantly, but the polled payload may
-        // lag one cycle - don't let a stale sync flip the switch back in between.
+        // Optimistic feedback + timestamped command: the sync loop does last-write-wins
+        // against the polled payload, so no stale cycle can flip the switch back.
         updateState(GROUP_DEVICE + "#" + CHANNEL_SIDE_POWER, OnOffType.from(turnOn));
-        sidePowerOverrideUntil = System.currentTimeMillis() + POWER_OVERRIDE_MILLIS;
+        commanded.put(CHANNEL_SIDE_POWER, new CommandedValue(Instant.now(), turnOn));
         CompletableFuture<Void> future = turnOn
                 ? client.turnOnSide(userId)
                 : client.turnOffSide(userId);
         future.thenRun(this::scheduleRefresh).exceptionally(this::logCommandFailure);
+    }
+
+    /** Max angles of the adjustable base sections. */
+    static final int HEAD_ANGLE_MAX = 45;
+    static final int FEET_ANGLE_MAX = 20;
+
+    /**
+     * Heating/cooling/idle from the raw target level sign. Level 0 is neutral
+     * (27 C) - actively tracking it is neither heating nor cooling.
+     * Static and unit-testable.
+     */
+    static String deriveHeatingState(boolean nowHeating, double targetLevelRaw) {
+        if (!nowHeating || targetLevelRaw == 0) {
+            return "idle";
+        }
+        return targetLevelRaw > 0 ? "heating" : "cooling";
+    }
+
+    /**
+     * Upstream quirk: while a side is off the API reports target level 0 (27 C),
+     * which is meaningless. The shown target therefore holds the last MEANINGFUL
+     * raw level; a genuinely commanded 0 (heating flag set) or any non-zero raw
+     * value updates it. The returned value is also the new persisted state.
+     * Static and unit-testable.
+     */
+    static double resolveShownTargetLevel(double targetLevelRaw, @Nullable Boolean nowHeating,
+            @Nullable Double previousShown) {
+        boolean meaningful = targetLevelRaw != 0 || Boolean.TRUE.equals(nowHeating);
+        if (meaningful || previousShown == null) {
+            return targetLevelRaw;
+        }
+        return previousShown;
+    }
+
+    /**
+     * Staleness of cached user data relative to its own poll cadence: older than
+     * four intervals (but never less than 60 s) means polls keep failing and the
+     * cached values can no longer be trusted as current. A null timestamp (no
+     * successful poll ever) counts as stale. Static and unit-testable.
+     */
+    static boolean isUserDataStale(@Nullable Instant lastUpdated, Instant now, long userIntervalSeconds) {
+        long thresholdSeconds = Math.max(60L, 4 * userIntervalSeconds);
+        return lastUpdated == null || lastUpdated.plusSeconds(thresholdSeconds).isBefore(now);
+    }
+
+    /**
+     * Whether the alarm channels should be reset to UNDEF: there is no selectable
+     * alarm AND either stale alarm entries are still published or the last alarms
+     * poll was recent enough to trust an empty list (e.g. subscription lapse).
+     * Static and unit-testable.
+     */
+    static boolean shouldClearAlarmChannels(boolean nextAlarmPresent, int alarmCount, @Nullable Instant alarmsPolledAt,
+            Instant now, long userIntervalSeconds) {
+        if (nextAlarmPresent) {
+            return false;
+        }
+        return alarmCount > 0 || !isUserDataStale(alarmsPolledAt, now, userIntervalSeconds);
+    }
+
+    /**
+     * Computes the leg/torso angle pair for a single-axis base command: the moved
+     * axis takes the commanded (clamped) angle, the other axis keeps its last known
+     * angle so it does not move. Static and unit-testable.
+     */
+    static int[] mergeBaseAngles(boolean head, int angle, @Nullable Integer cachedLeg, @Nullable Integer cachedTorso) {
+        int clamped = Math.max(0, Math.min(head ? HEAD_ANGLE_MAX : FEET_ANGLE_MAX, angle));
+        int currentLeg = cachedLeg != null ? cachedLeg : 0;
+        int currentTorso = cachedTorso != null ? cachedTorso : 0;
+        return head ? new int[] { currentLeg, clamped } : new int[] { clamped, currentTorso };
     }
 
     private void handleBaseAngle(EightSleepApiClient client, Command command, boolean head) throws ApiException {
@@ -292,25 +394,21 @@ public class BedSideHandler extends BaseThingHandler {
             logger.warn("Unsupported command type {} for base angle", command.getClass().getSimpleName());
             return;
         }
-        angle = Math.max(0, Math.min(head ? 45 : 20, angle));
 
         AccountHandler account = getAccountHandler();
         AccountHandler.UserData data = account != null ? account.getUserData(userId) : null;
         BaseData.SideData baseSide = data != null ? data.getBaseSide(side) : null;
-        int currentLeg = baseSide != null && baseSide.leg != null && baseSide.leg.currentAngle != null
-                ? baseSide.leg.currentAngle : 0;
-        int currentTorso = baseSide != null && baseSide.torso != null && baseSide.torso.currentAngle != null
-                ? baseSide.torso.currentAngle : 0;
+        Integer cachedLeg = baseSide != null && baseSide.leg != null ? baseSide.leg.currentAngle : null;
+        Integer cachedTorso = baseSide != null && baseSide.torso != null ? baseSide.torso.currentAngle : null;
+        int[] angles = mergeBaseAngles(head, angle, cachedLeg, cachedTorso);
 
-        int legAngle = head ? currentLeg : angle;
-        int torsoAngle = head ? angle : currentTorso;
         AccountHandler acct = getAccountHandler();
         String devId = acct != null ? acct.getDeviceId() : null;
         if (devId == null) {
             logger.debug("No device id; cannot set base angle");
             return;
         }
-        client.setBaseAngle(userId, devId, legAngle, torsoAngle).thenRun(this::scheduleRefresh)
+        client.setBaseAngle(userId, devId, angles[0], angles[1]).thenRun(this::scheduleRefresh)
                 .exceptionally(this::logCommandFailure);
     }
 
@@ -327,18 +425,15 @@ public class BedSideHandler extends BaseThingHandler {
 
     private void handleAlarmEnabled(EightSleepApiClient client, Command command) {
         AccountHandler.UserData userData = getUserData();
-        EightSleepApiClient.Alarm alarm = userData != null ? findTargetAlarm(userData) : null;
+        EightSleepApiClient.Alarm alarm = userData != null ? findTargetAlarm(userData, Instant.now()) : null;
         if (alarm == null || alarm.id == null) {
             logger.debug("No upcoming alarm to toggle");
             return;
         }
         boolean enable = command == OnOffType.ON;
-        // Optimistic feedback: the server takes a few seconds to apply; keep the switch
-        // at the commanded value until a poll confirms.
+        // Optimistic feedback + timestamped command (last-write-wins vs the polled list).
         updateState(GROUP_CURRENT + "#" + CHANNEL_ALARM_ENABLED, OnOffType.from(enable));
-        pendingAlarmId = alarm.id;
-        pendingAlarmEnabled = enable;
-        alarmOverrideUntil = System.currentTimeMillis() + ALARM_OVERRIDE_MILLIS;
+        commandedAlarms.put(alarm.id, new CommandedValue(Instant.now(), enable));
         client.setAlarmEnabled(userId, alarm, enable).thenRun(this::scheduleRefresh)
                 .exceptionally(this::logCommandFailure);
     }
@@ -348,14 +443,13 @@ public class BedSideHandler extends BaseThingHandler {
         if (command instanceof DateTimeType dateTime) {
             newTime = dateTime.getInstant();
         } else if (command instanceof StringType string) {
-            try {
-                newTime = java.time.LocalTime.parse(string.toString().trim().substring(0, 8))
-                        .atDate(java.time.LocalDate.now())
-                        .atZone(java.time.ZoneId.systemDefault()).toInstant();
-            } catch (Exception e) {
+            java.time.LocalTime parsed = TrendParser.parseTimeOfDay(string.toString());
+            if (parsed == null) {
                 logger.warn("Cannot parse '{}' as an alarm time", string);
                 return;
             }
+            newTime = parsed.atDate(java.time.LocalDate.now())
+                    .atZone(java.time.ZoneId.systemDefault()).toInstant();
         }
         if (newTime == null) {
             logger.warn("Unsupported command type {} for alarm time", command.getClass().getSimpleName());
@@ -363,7 +457,7 @@ public class BedSideHandler extends BaseThingHandler {
         }
 
         AccountHandler.UserData userData = getUserData();
-        EightSleepApiClient.Alarm alarm = userData != null ? findTargetAlarm(userData) : null;
+        EightSleepApiClient.Alarm alarm = userData != null ? findTargetAlarm(userData, Instant.now()) : null;
         if (alarm == null || alarm.id == null) {
             logger.debug("No upcoming alarm to reschedule");
             return;
@@ -377,7 +471,7 @@ public class BedSideHandler extends BaseThingHandler {
 
     private void handleDismissAlarm(EightSleepApiClient client) {
         AccountHandler.UserData userData = getUserData();
-        EightSleepApiClient.Alarm alarm = userData != null ? findTargetAlarm(userData) : null;
+        EightSleepApiClient.Alarm alarm = userData != null ? findTargetAlarm(userData, Instant.now()) : null;
         if (alarm == null || alarm.id == null) {
             logger.debug("No upcoming alarm to dismiss");
             return;
@@ -387,7 +481,7 @@ public class BedSideHandler extends BaseThingHandler {
 
     private void handleSnoozeAlarm(EightSleepApiClient client) {
         AccountHandler.UserData userData = getUserData();
-        EightSleepApiClient.Alarm alarm = userData != null ? findTargetAlarm(userData) : null;
+        EightSleepApiClient.Alarm alarm = userData != null ? findTargetAlarm(userData, Instant.now()) : null;
         if (alarm == null || alarm.id == null) {
             logger.debug("No upcoming alarm to snooze");
             return;
@@ -439,8 +533,15 @@ public class BedSideHandler extends BaseThingHandler {
      * Raw heating level that Autopilot is targeting (smartSchedule.bedTimeLevel), or null.
      */
     private @Nullable Double getAutopilotTargetLevel(AccountHandler.UserData data) {
-        JsonObject temp = data.temperature;
-        return TrendParser.getDouble(TrendParser.getObject(temp, "smart"), "bedTimeLevel");
+        return autopilotTargetLevel(data.temperature);
+    }
+
+    /**
+     * Raw heating level that Autopilot is targeting (smartSchedule.bedTimeLevel),
+     * or null. Static and unit-testable.
+     */
+    static @Nullable Double autopilotTargetLevel(@Nullable JsonObject temperature) {
+        return TrendParser.getDouble(TrendParser.getObject(temperature, "smart"), "bedTimeLevel");
     }
 
     private EightSleepApiClient.PillowData getPillowData() {
@@ -450,82 +551,45 @@ public class BedSideHandler extends BaseThingHandler {
     }
 
     /**
-     * Computes when an alarm will next fire, WITHOUT relying on the server's
-     * nextTimestamp field (which goes stale or null for disabled alarms).
-     *
-     * Repeating alarms: derived from {@code time} + {@code repeat.weekDays} in the
-     * local timezone. A repeat flag with no active weekday is treated as daily.
-     * One-shot alarms (repeat disabled): the server's nextTimestamp is used when
-     * present, since a bare HH:mm:ss carries no date.
+     * Delegates to {@link EightSleepApiClient.Alarm#computeNextRun(java.time.ZoneId)}.
      */
-    private static @Nullable Instant computeNextRun(EightSleepApiClient.Alarm alarm) {
-        if (alarm == null || alarm.time == null || alarm.time.isBlank()) {
-            return null;
-        }
-        java.time.LocalTime time;
-        try {
-            time = java.time.LocalTime.parse(alarm.time.trim().substring(0, 8));
-        } catch (Exception e) {
-            return null;
-        }
-        ZoneId zone = ZoneId.systemDefault();
-        Instant now = Instant.now();
-
-        boolean repeating = Boolean.TRUE.equals(
-                alarm.repeat != null ? alarm.repeat.enabled : null);
-        Map<String, Boolean> weekDays = alarm.repeat != null ? alarm.repeat.weekDays : null;
-
-        if (repeating) {
-            boolean[] mask = new boolean[7]; // Mon..Sun
-            boolean anyDay = false;
-            if (weekDays != null) {
-                String[] names = { "monday", "tuesday", "wednesday", "thursday", "friday",
-                        "saturday", "sunday" };
-                for (int i = 0; i < names.length; i++) {
-                    Boolean active = weekDays.get(names[i]);
-                    if (Boolean.TRUE.equals(active)) {
-                        mask[i] = true;
-                        anyDay = true;
-                    }
-                }
-            }
-            if (!anyDay) {
-                java.util.Arrays.fill(mask, true); // repeat enabled, no days = daily
-            }
-            for (int addDays = 0; addDays < 8; addDays++) {
-                java.time.LocalDate date = java.time.LocalDate.now(zone).plusDays(addDays);
-                int idx = date.getDayOfWeek().getValue() - 1; // Monday = 0
-                if (!mask[idx]) {
-                    continue;
-                }
-                Instant candidate = date.atTime(time).atZone(zone).toInstant();
-                if (!candidate.isBefore(now)) {
-                    return candidate;
-                }
-            }
-            return null;
-        }
-
-        // one-shot: fall back to the server-provided timestamp
-        return TrendParser.parseTimestamp(alarm.nextTimestamp);
+    private static java.time.@Nullable Instant computeNextRun(
+            EightSleepApiClient.Alarm alarm) {
+        return alarm.computeNextRun(java.time.ZoneId.systemDefault());
     }
 
     /**
-     * Resolves which alarm the alarm channels represent: the one that will fire
-     * soonest by our own computation, disabled alarms included. Ties break on id.
+     * Selects the alarm the alarm channels represent: soonest locally-computed run
+     * across ALL alarms, enabled or not (a disabled alarm's schedule is derived
+     * from time+weekDays since its server nextTimestamp goes null). Selection is
+     * therefore stable: toggling one alarm off doesn't move selection to another.
+     * Ties break on id; an alarm without an id loses the tie (it cannot be toggled).
      */
-    private EightSleepApiClient.Alarm findTargetAlarm(AccountHandler.UserData userData) {
+    static EightSleepApiClient.Alarm findTargetAlarm(
+            org.openhab.binding.eightsleep.internal.handler.AccountHandler.UserData userData,
+            java.time.Instant now) {
+        return findTargetAlarm(userData, now, java.time.ZoneId.systemDefault());
+    }
+
+    /**
+     * As above with an explicit zone - the production path uses the system zone,
+     * tests inject a fixed zone so they cannot depend on where they run.
+     */
+    static EightSleepApiClient.Alarm findTargetAlarm(
+            org.openhab.binding.eightsleep.internal.handler.AccountHandler.UserData userData,
+            java.time.Instant now, java.time.ZoneId zone) {
+        // Rule 2: soonest computed run (enabled or disabled).
         EightSleepApiClient.Alarm target = null;
         Instant targetRun = null;
         for (EightSleepApiClient.Alarm alarm : userData.alarms) {
-            Instant run = computeNextRun(alarm);
+            Instant run = alarm.computeNextRun(zone, now);
             if (run == null) {
                 continue;
             }
             boolean closer = targetRun == null || run.isBefore(targetRun)
                     || (run.equals(targetRun) && target != null
-                            && alarm.id != null && target.id != null
-                            && alarm.id.compareTo(target.id) < 0);
+                            && alarm.id != null
+                            && (target.id == null || alarm.id.compareTo(target.id) < 0));
             if (closer) {
                 target = alarm;
                 targetRun = run;
@@ -535,29 +599,12 @@ public class BedSideHandler extends BaseThingHandler {
     }
 
     /**
-     * Publishes the computed next-run instant for the target alarm.
-     */
-
-    /**
-     * Parses an "HH:MM:SS" alarm time-of-day into today's Instant in the system zone.
-     */
-    private Instant parseAlarmTimeOfDay(@Nullable String timeOfDay) {
-        if (timeOfDay == null || timeOfDay.isBlank()) {
-            return null;
-        }
-        try {
-            java.time.LocalTime time = java.time.LocalTime.parse(timeOfDay.trim().substring(0, 8));
-            return java.time.LocalDate.now().atTime(time).atZone(java.time.ZoneId.systemDefault()).toInstant();
-        } catch (Exception e) {
-            logger.debug("Cannot parse alarm time '{}': {}", timeOfDay, e.getMessage());
-            return null;
-        }
-    }
-
-    /**
      * Parses a temperature command into a double value, or NaN when unsupported.
+     * Static and unit-testable; QuantityType values are converted to their own
+     * unit's number (Celsius-compatible units to Celsius, Fahrenheit-compatible
+     * to Fahrenheit), plain numbers pass through.
      */
-    private double parseTemperature(Command command) {
+    static double parseTemperature(Command command) {
         if (command instanceof QuantityType<?> quantity) {
             javax.measure.Unit<?> unit = quantity.getUnit();
             if (unit.isCompatible(SIUnits.CELSIUS)) {
@@ -568,7 +615,6 @@ public class BedSideHandler extends BaseThingHandler {
                 QuantityType<?> fahr = quantity.toInvertibleUnit(ImperialUnits.FAHRENHEIT);
                 return fahr != null ? fahr.doubleValue() : quantity.doubleValue();
             }
-            logger.warn("Incompatible unit {} for temperature command", unit);
             return Double.NaN;
         }
         if (command instanceof DecimalType decimal) {
@@ -578,7 +624,7 @@ public class BedSideHandler extends BaseThingHandler {
             try {
                 return Double.parseDouble(string.toString());
             } catch (NumberFormatException e) {
-                logger.warn("Cannot parse '{}' as temperature", string);
+                return Double.NaN;
             }
         }
         return Double.NaN;
@@ -601,6 +647,17 @@ public class BedSideHandler extends BaseThingHandler {
      * Pushes the cached bridge data into the channels of this bed side.
      */
     protected void updateChannelsFromCache(AccountHandler account) {
+        // A single unexpected payload quirk must not kill the periodic sync job:
+        // scheduleWithFixedDelay suppresses ALL future executions once a run throws.
+        try {
+            doUpdateChannelsFromCache(account);
+        } catch (RuntimeException e) {
+            logger.warn("Channel sync failed for user {} side '{}': {}", userId, side, e.getMessage(), e);
+        }
+    }
+
+    private void doUpdateChannelsFromCache(AccountHandler account) {
+        syncNotes.clear();
         if (!syncStartedLogged) {
             syncStartedLogged = true;
             logger.debug("Channel sync active for user {} side '{}'; thing status {}",
@@ -610,22 +667,40 @@ public class BedSideHandler extends BaseThingHandler {
         AccountHandler.UserData userData = account.getUserData(userId);
 
         if (deviceData == null || userData == null) {
-            if (getThing().getStatusInfo().getStatusDetail() != ThingStatusDetail.BRIDGE_OFFLINE) {
-                updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.BRIDGE_OFFLINE);
+            if (deviceData == null) {
+                // the bridge itself is not producing data yet
+                if (getThing().getStatusInfo().getStatusDetail() != ThingStatusDetail.BRIDGE_OFFLINE) {
+                    updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.BRIDGE_OFFLINE);
+                }
+            } else {
+                // device data flows, but this user is never polled - almost certainly
+                // a bad userId configuration, not a bridge problem
+                updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.CONFIGURATION_ERROR,
+                        "@text/bedside.status.user-not-found");
             }
             note("deviceData", deviceData != null);
             note("userData", userData != null);
             logSyncSummary();
             return;
         }
-        if (getThing().getStatus() != ThingStatus.ONLINE) {
+        // Staleness guard: cached values keep being published (frozen but visible),
+        // while the thing status reflects whether the data behind them is current.
+        boolean userDataStale = isUserDataStale(userData.lastUpdated, Instant.now(),
+                account.userRefreshIntervalSeconds());
+        if (userDataStale) {
+            if (getThing().getStatus() != ThingStatus.OFFLINE
+                    || getThing().getStatusInfo().getStatusDetail() != ThingStatusDetail.COMMUNICATION_ERROR) {
+                updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR,
+                        "@text/bedside.status.stale-data");
+            }
+        } else if (getThing().getStatus() != ThingStatus.ONLINE) {
             updateStatus(ThingStatus.ONLINE);
         }
-        syncNotes.clear();
 
         boolean fahrenheit = account.getTemperatureUnit('c') == 'f';
         Double heatingLevelRaw = deviceData.getHeatingLevel(side);
         Double targetLevelRaw = deviceData.getTargetHeatingLevel(side);
+        Boolean nowHeating = "right".equals(side) ? deviceData.rightNowHeating : deviceData.leftNowHeating;
         if (targetLevelRaw == null) {
             // Target key missing for this side: dump everything we know about the payload
             // once per poll so the real field names can be identified from the log.
@@ -643,19 +718,12 @@ public class BedSideHandler extends BaseThingHandler {
         note("hasWater", deviceData.hasWater);
         if (heatingLevelRaw != null) {
             updateState(GROUP_DEVICE + "#" + CHANNEL_HEATING_LEVEL, new DecimalType(heatingLevelRaw));
-            double temp = HeatingLevelConversion.levelToTemperature(heatingLevelRaw, fahrenheit);
-            updateState(GROUP_CURRENT + "#" + CHANNEL_BED_TEMPERATURE, toQuantity(temp, fahrenheit));
         }
         if (targetLevelRaw != null) {
             // Upstream: when the bed is off the API reports a meaningless 0 (27 C);
             // keep the last meaningful target instead of flipping to it.
-            boolean meaningful = targetLevelRaw != 0
-                    || Boolean.TRUE.equals("right".equals(side) ? deviceData.rightNowHeating : deviceData.leftNowHeating);
-            if (meaningful || lastKnownTargetLevel == null) {
-                lastKnownTargetLevel = targetLevelRaw;
-            }
-            double shownLevel = targetLevelRaw == 0 && lastKnownTargetLevel != 0.0
-                    ? lastKnownTargetLevel : targetLevelRaw;
+            double shownLevel = resolveShownTargetLevel(targetLevelRaw, nowHeating, lastKnownTargetLevel);
+            lastKnownTargetLevel = shownLevel;
             double targetTemp = HeatingLevelConversion.levelToTemperature(shownLevel, fahrenheit);
             updateState(GROUP_CURRENT + "#" + CHANNEL_TARGET_TEMPERATURE, toQuantity(targetTemp, fahrenheit));
         } else {
@@ -672,16 +740,17 @@ public class BedSideHandler extends BaseThingHandler {
         if (remaining != null) {
             updateState(GROUP_DEVICE + "#" + CHANNEL_REMAINING_TIME, new QuantityType<>(remaining, Units.SECOND));
         }
-        Boolean nowHeating = "right".equals(side) ? deviceData.rightNowHeating : deviceData.leftNowHeating;
         if (nowHeating != null && targetLevelRaw != null) {
-            String state = nowHeating ? (targetLevelRaw > 0 ? "heating" : "cooling") : "idle";
-            updateState(GROUP_DEVICE + "#" + CHANNEL_HEATING_STATE, new StringType(state));
+            updateState(GROUP_DEVICE + "#" + CHANNEL_HEATING_STATE,
+                    new StringType(deriveHeatingState(nowHeating, targetLevelRaw)));
         }
 
         // --- sleep session channels (raw trends JSON, parsed defensively) ---
-        // Day-level fields (score, presenceStart/End, processing, tnt, durations,
+        // Day-level fields (score, presenceStart/End, tnt, durations,
         // sleepQualityScore) sit on each "day"; only timeseries/stages are session-level.
         TrendParser trends = userData.getTrends();
+        Double measuredBedC = trends.isEmpty() ? null
+                : TrendParser.latestSeriesValue(trends.getCurrentSession(), "tempBedC");
         if (!trends.isEmpty()) {
             JsonObject currentDay = trends.getDay(0);
             JsonObject previousDay = trends.getDay(1);
@@ -697,11 +766,6 @@ public class BedSideHandler extends BaseThingHandler {
                         TrendParser.getString(currentDay, "presenceEnd"));
                 if (presenceEnd != null) {
                     updateState(GROUP_CURRENT + "#" + CHANNEL_SESSION_END, new DateTimeType(presenceEnd));
-                }
-                Boolean processing = TrendParser.getBoolean(currentDay, "processing");
-                if (processing != null) {
-                    updateState(GROUP_CURRENT + "#" + CHANNEL_SLEEP_STAGE,
-                            new StringType(Boolean.TRUE.equals(processing) ? "inProgress" : "complete"));
                 }
 
                 putDecimal(GROUP_CURRENT, CHANNEL_SLEEP_SCORE, TrendParser.getDouble(currentDay, "score"));
@@ -725,12 +789,17 @@ public class BedSideHandler extends BaseThingHandler {
 
             if (currentSession != null) {
                 // Timeseries values are celsius readings (upstream converts with "c" fixed)
-                putLatestCelsius(currentSession, "tempBedC", GROUP_CURRENT, CHANNEL_BED_TEMPERATURE);
                 putLatestCelsius(currentSession, "tempRoomC", GROUP_DEVICE, CHANNEL_ROOM_TEMPERATURE);
                 putLatest(currentSession, "heartRate", GROUP_CURRENT, CHANNEL_HEART_RATE);
                 putLatest(currentSession, "respiratoryRate", GROUP_CURRENT, CHANNEL_RESPIRATORY_RATE);
                 // Bed presence: fresh heart rate data confirms presence
-                updateState(GROUP_BASE + "#" + CHANNEL_BED_PRESENCE, OnOffType.from(isPresent(currentSession)));
+                updateState(GROUP_BASE + "#" + CHANNEL_BED_PRESENCE, OnOffType.from(
+                        isPresent(currentSession, Instant.now())));
+                // Current stage from the session's stage segments
+                String currentStage = currentSleepStage(currentSession, Instant.now());
+                if (currentStage != null) {
+                    updateState(GROUP_CURRENT + "#" + CHANNEL_SLEEP_STAGE, new StringType(currentStage));
+                }
             } else {
                 updateState(GROUP_BASE + "#" + CHANNEL_BED_PRESENCE, OnOffType.OFF);
             }
@@ -738,7 +807,6 @@ public class BedSideHandler extends BaseThingHandler {
             // last completed sleep: the previous day
             if (previousDay != null) {
                 putDecimal(GROUP_LAST_SLEEP, CHANNEL_SLEEP_SCORE, TrendParser.getDouble(previousDay, "score"));
-                putDecimal(GROUP_LAST_SLEEP, CHANNEL_FITNESS_SCORE, TrendParser.getDouble(previousDay, "score"));
                 putDecimal(GROUP_LAST_SLEEP, CHANNEL_QUALITY_SCORE, TrendParser.getDouble(
                         TrendParser.getObject(previousDay, "sleepQualityScore"), "total"));
                 putDecimal(GROUP_LAST_SLEEP, CHANNEL_ROUTINE_SCORE, TrendParser.getDouble(
@@ -771,6 +839,16 @@ public class BedSideHandler extends BaseThingHandler {
                     updateState(GROUP_LAST_SLEEP + "#" + CHANNEL_SESSION_END, new DateTimeType(lastEnd));
                 }
             }
+        }
+
+        // --- bed temperature: the MEASURED surface temperature wins; the level-derived
+        // conversion is only a fallback for when no timeseries data exists yet.
+        if (measuredBedC != null) {
+            updateState(GROUP_CURRENT + "#" + CHANNEL_BED_TEMPERATURE,
+                    new QuantityType<>(measuredBedC, SIUnits.CELSIUS));
+        } else if (heatingLevelRaw != null) {
+            updateState(GROUP_CURRENT + "#" + CHANNEL_BED_TEMPERATURE, toQuantity(
+                    HeatingLevelConversion.levelToTemperature(heatingLevelRaw, fahrenheit), fahrenheit));
         }
 
         // base channels
@@ -821,7 +899,7 @@ public class BedSideHandler extends BaseThingHandler {
             updateState(GROUP_DEVICE + "#" + CHANNEL_IS_PRIMING, OnOffType.from(deviceData.priming));
         }
         if (deviceData.lastPrime != null && !deviceData.lastPrime.isBlank()) {
-            Instant lastPrime = parseTimestamp(deviceData.lastPrime);
+            Instant lastPrime = TrendParser.parseTimestamp(deviceData.lastPrime);
             if (lastPrime != null) {
                 updateState(GROUP_DEVICE + "#" + CHANNEL_LAST_PRIME, new DateTimeType(lastPrime));
             }
@@ -829,31 +907,43 @@ public class BedSideHandler extends BaseThingHandler {
 
         // --- away mode state ---
         // Live rule (verified via captures): away = listed in awaySides AND removed
-        // from the side slots. UNDEF only before the first successful away poll.
+        // from the side slots. Last-write-wins: a command stamps its time; a poll
+        // observed later wins. UNDEF until either source has spoken.
         if (!account.isAwayPolledOnce()) {
             updateState(GROUP_DEVICE + "#" + CHANNEL_AWAY_MODE, UnDefType.UNDEF);
         } else {
             updateState(GROUP_DEVICE + "#" + CHANNEL_AWAY_MODE, OnOffType.from(userData.awayMode));
         }
 
-        // --- side power (live) ---
-        // Authoritative source: /temperature currentState.type. The heating LEVEL
-        // persists while the bed is off, so it must never drive this channel.
+        // --- side power (live, last-write-wins) ---
+        // Polled truth: /temperature currentState.type. A channel command writes a
+        // timestamped entry; whichever source was observed more recently wins. The
+        // heating LEVEL persists while the bed is off, so it never drives this channel.
         String powerType = TrendParser.getString(
                 TrendParser.getObject(userData.temperature, "currentState"), "type");
         note("powerType", powerType == null ? "<absent>" : powerType);
-        boolean withinOverride = System.currentTimeMillis() < sidePowerOverrideUntil;
-        if (withinOverride) {
-            // a power command is in flight; keep the optimistic value
-        } else if (powerType != null) {
-            updateState(GROUP_DEVICE + "#" + CHANNEL_SIDE_POWER, OnOffType.from(!"off".equalsIgnoreCase(powerType)));
-        } else if (targetLevelRaw != null) {
-            // no temperature payload yet - fall back to the target level heuristic
-            updateState(GROUP_DEVICE + "#" + CHANNEL_SIDE_POWER, OnOffType.from(targetLevelRaw != 0));
+
+        Boolean polledOn = powerType != null ? !"off".equalsIgnoreCase(powerType)
+                : (targetLevelRaw != null ? targetLevelRaw != 0 : null);
+        Instant polledAt = userData.temperatureAt;
+        Boolean resolvedPower = resolveLatest(polledOn, polledAt, commanded.get(CHANNEL_SIDE_POWER));
+        if (resolvedPower != null) {
+            updateState(GROUP_DEVICE + "#" + CHANNEL_SIDE_POWER, OnOffType.from(resolvedPower));
+            if (shouldRetireCommand(polledOn, resolvedPower)) {
+                commanded.remove(CHANNEL_SIDE_POWER); // server confirmed
+            }
         }
 
         // --- alarm state ---
-        EightSleepApiClient.Alarm nextAlarm = findTargetAlarm(userData);
+        EightSleepApiClient.Alarm nextAlarm = findTargetAlarm(userData, Instant.now());
+        if (shouldClearAlarmChannels(nextAlarm != null, userData.alarms.size(), userData.alarmsPolledAt,
+                Instant.now(), account.userRefreshIntervalSeconds())) {
+            // A fresh poll reporting no alarms (e.g. subscription lapsed) must clear the
+            // channels instead of silently keeping stale values.
+            updateState(GROUP_CURRENT + "#" + CHANNEL_NEXT_ALARM, UnDefType.UNDEF);
+            updateState(GROUP_CURRENT + "#" + CHANNEL_ALARM_ENABLED, UnDefType.UNDEF);
+            updateState(GROUP_CURRENT + "#" + CHANNEL_ALARM_TIME, UnDefType.UNDEF);
+        }
         if (nextAlarm != null) {
             // publish our computed schedule: the server's nextTimestamp goes null for
             // disabled alarms, but the alarm still has a scheduled time-of-day.
@@ -865,31 +955,25 @@ public class BedSideHandler extends BaseThingHandler {
             if (alarmTime != null) {
                 updateState(GROUP_CURRENT + "#" + CHANNEL_ALARM_TIME, new DateTimeType(alarmTime));
             }
-
-            // While an alarm toggle is in flight, trust our commanded value - the polled
-            // list lags a few seconds and would otherwise bounce the switch back.
-            String pendingId = pendingAlarmId;
-            boolean inFlight = System.currentTimeMillis() < alarmOverrideUntil
-                    && nextAlarm.id != null && nextAlarm.id.equals(pendingId)
-                    && pendingAlarmEnabled != null;
-            if (inFlight) {
-                updateState(GROUP_CURRENT + "#" + CHANNEL_ALARM_ENABLED,
-                        OnOffType.from(pendingAlarmEnabled));
-            } else if (nextAlarm.enabled != null) {
-                updateState(GROUP_CURRENT + "#" + CHANNEL_ALARM_ENABLED,
-                        OnOffType.from(nextAlarm.enabled));
+            // Last-write-wins: a command stamps its time; a poll observed later wins.
+            Boolean enabledToPublish = nextAlarm.enabled;
+            CommandedValue cmd = nextAlarm.id != null ? commandedAlarms.get(nextAlarm.id) : null;
+            Instant observedAt = userData.alarmsPolledAt;
+            Boolean resolved = resolveLatest(enabledToPublish, observedAt, cmd);
+            if (resolved != null) {
+                updateState(GROUP_CURRENT + "#" + CHANNEL_ALARM_ENABLED, OnOffType.from(resolved));
+                // Retire the command only when the polled value WON (server confirmed).
+                if (shouldRetireCommand(enabledToPublish, resolved)) {
+                    if (nextAlarm.id != null) {
+                        commandedAlarms.remove(nextAlarm.id); // server confirmed
+                    }
+                }
             }
         }
 
 
         // Publish the compact sync summary (INFO, only when something changed)
         logSyncSummary();
-    }
-
-    private void putScore(String group, String channel, @Nullable Double score) {
-        if (score != null) {
-            updateState(group + "#" + channel, new DecimalType(score));
-        }
     }
 
     private void putDecimal(String group, String channel, @Nullable Double value) {
@@ -908,10 +992,6 @@ public class BedSideHandler extends BaseThingHandler {
         }
     }
 
-    /**
-     * Publishes the latest value of a temperature series as a Celsius quantity
-     * (the API stores these timeseries in celsius).
-     */
     /**
      * Publishes the latest value of a temperature series. The API stores these
      * timeseries in celsius (the series names are literally tempBedC / tempRoomC),
@@ -932,22 +1012,70 @@ public class BedSideHandler extends BaseThingHandler {
     }
 
     /**
-     * Bed presence detection: heart rate data younger than {@link #PRESENCE_FRESH_SECONDS}
-     * confirms presence.
+     * Resolves the current sleep stage from the session's {@code stages} segments
+     * (verified shape: [{"stage":"awake","duration":2070}, ...] oldest-first).
+     * "Now" must fall inside the session window [sleepStart, sleepEnd] - the only
+     * verified currency signal (live captures carry no "processing" flag) - and the
+     * stage is the segment covering the elapsed time. Static and unit-testable.
+     *
+     * @return "awake"/"light"/"deep"/"rem", or null when unknown/not currently sleeping
      */
-    private boolean isPresent(@Nullable JsonObject session) {
+    static @Nullable String currentSleepStage(@Nullable JsonObject session, Instant now) {
+        if (session == null) {
+            return null;
+        }
+        Instant sleepStart = TrendParser.parseTimestamp(TrendParser.getString(session, "sleepStart"));
+        Instant sleepEnd = TrendParser.parseTimestamp(TrendParser.getString(session, "sleepEnd"));
+        if (sleepStart == null || sleepEnd == null || now.isBefore(sleepStart) || now.isAfter(sleepEnd)) {
+            return null; // not inside a live sleep session
+        }
+        long elapsedSeconds = Duration.between(sleepStart, now).getSeconds();
+        JsonElement stagesEl = session.get("stages");
+        if (stagesEl == null || !stagesEl.isJsonArray()) {
+            return null;
+        }
+        String current = null;
+        long consumed = 0;
+        for (JsonElement entry : stagesEl.getAsJsonArray()) {
+            if (!entry.isJsonObject()) {
+                continue;
+            }
+            JsonObject segment = entry.getAsJsonObject();
+            Double duration = TrendParser.getDouble(segment, "duration");
+            String stage = TrendParser.getString(segment, "stage");
+            if (duration == null || stage == null) {
+                continue;
+            }
+            if (elapsedSeconds < consumed + duration) {
+                current = stage.toLowerCase();
+                break;
+            }
+            // the last fully elapsed segment stays current until new data arrives
+            current = stage.toLowerCase();
+            consumed += duration.longValue();
+        }
+        return current;
+    }
+
+    /**
+     * Bed presence detection: heart rate data with a timestamp younger than
+     * {@link #PRESENCE_FRESH_SECONDS} (either direction - future timestamps are
+     * tolerated as clock skew) confirms presence. Static and unit-testable.
+     */
+    static boolean isPresent(@Nullable JsonObject session, Instant now) {
         JsonObject ts = TrendParser.getObject(session, "timeseries");
         JsonElement el = ts != null ? ts.get("heartRate") : null;
         if (el == null || !el.isJsonArray() || el.getAsJsonArray().size() == 0) {
             return false;
         }
         JsonElement entry = el.getAsJsonArray().get(el.getAsJsonArray().size() - 1);
-        if (!entry.isJsonArray() || entry.getAsJsonArray().size() < 1) {
+        if (!entry.isJsonArray() || entry.getAsJsonArray().size() < 1
+                || !entry.getAsJsonArray().get(0).isJsonPrimitive()) {
             return false;
         }
         Instant heartBeatTime = TrendParser.parseTimestamp(entry.getAsJsonArray().get(0).getAsString());
         return heartBeatTime != null
-                && Duration.between(heartBeatTime, Instant.now()).abs().getSeconds() < PRESENCE_FRESH_SECONDS;
+                && Duration.between(heartBeatTime, now).abs().getSeconds() < PRESENCE_FRESH_SECONDS;
     }
 
     private QuantityType<?> toQuantity(double temperature, boolean fahrenheit) {
@@ -955,7 +1083,7 @@ public class BedSideHandler extends BaseThingHandler {
     }
 
     /**
-     * Logs one compact INFO line per sync describing every channel decision, so state
+     * Logs one compact DEBUG line per sync describing every channel decision, so state
      * questions can be answered from the log without TRACE level.
      */
     private void logSyncSummary() {
@@ -966,29 +1094,14 @@ public class BedSideHandler extends BaseThingHandler {
         }
     }
 
-    /** Whether the bridge is configured to interpret plain numbers as fahrenheit. */
-    private boolean fahrenheitDisplay() {
-        AccountHandler account = getAccountHandler();
-        return account != null && account.getTemperatureUnit('c') == 'f';
-    }
-
     /**
-     * Parses an ISO-8601 timestamp (e.g. lastPrime) tolerating a trailing Z or offset.
+     * Parses an "HH:MM:SS" alarm time-of-day into today's Instant in the system zone.
      */
-    private @Nullable Instant parseTimestamp(@Nullable String value) {
-        if (value == null || value.isBlank() || "null".equalsIgnoreCase(value.trim())) {
-            return null;
-        }
-        try {
-            return Instant.parse(value.trim());
-        } catch (Exception e) {
-            try {
-                return java.time.OffsetDateTime.parse(value.trim()).toInstant();
-            } catch (Exception e2) {
-                logger.debug("Cannot parse timestamp '{}': {}", value, e2.getMessage());
-                return null;
-            }
-        }
+    private Instant parseAlarmTimeOfDay(@Nullable String timeOfDay) {
+        java.time.LocalTime time = TrendParser.parseTimeOfDay(timeOfDay);
+        return time != null
+                ? time.atDate(java.time.LocalDate.now()).atZone(java.time.ZoneId.systemDefault()).toInstant()
+                : null;
     }
 
     private synchronized @Nullable AccountHandler getAccountHandler() {

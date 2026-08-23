@@ -86,43 +86,16 @@ public class BedSideDiscoveryService extends AbstractDiscoveryService implements
             return;
         }
 
-        String bridgeId = account.getThing().getUID().getId();
 
         client.getHouseholdDevices().thenAccept(devices -> {
             String deviceLabel = devices.getOrDefault(deviceId, deviceId);
             client.getUserProfileForDevice(deviceId).thenAccept(profiles -> {
                 LOGGER.debug("Eight Sleep discovery: found {} user(s) for device {}", profiles.size(), deviceId);
                 for (EightSleepApiClient.UserProfileResult profile : profiles) {
-                    String side = profile.currentDevice() != null ? profile.currentDevice().side : null;
-                    String userId = profile.userId();
-                    if (userId == null) {
-                        continue;
+                    DiscoveryResult result = buildDiscoveryResult(account.getThing().getUID(), deviceLabel, profile);
+                    if (result != null) {
+                        thingDiscovered(result);
                     }
-                    if (side == null) {
-                        // Upstream warns but keeps the user functional with a left default
-                        LOGGER.debug("User {} reported no bed side; defaulting to left", userId);
-                        side = "left";
-                    }
-                    boolean soloBed = "solo".equalsIgnoreCase(side);
-                    String normalizedSide = soloBed ? "solo" : side.toLowerCase();
-                    String sanitizedUserId = userId.replaceAll("[^a-zA-Z0-9_-]", "_");
-                    ThingUID thingUid = new ThingUID(THING_TYPE_UID_BED_SIDE, bridgeId, sanitizedUserId);
-
-                    Map<String, Object> properties = new HashMap<>();
-                    properties.put(CONFIG_USER_ID, userId);
-                    properties.put("label", normalizedSide);
-
-                    String label = "Eight Sleep Bed Side ("
-                            + switch (normalizedSide) {
-                                case "left" -> "Left";
-                                case "right" -> "Right";
-                                default -> "Both";
-                            } + ") - " + deviceLabel;
-
-                    DiscoveryResult result = DiscoveryResultBuilder.create(thingUid)
-                            .withProperties(properties).withRepresentationProperty(CONFIG_USER_ID)
-                            .withBridge(account.getThing().getUID()).withLabel(label).build();
-                    thingDiscovered(result);
                 }
             }).exceptionally(ex -> {
                 Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
@@ -134,5 +107,54 @@ public class BedSideDiscoveryService extends AbstractDiscoveryService implements
             LOGGER.warn("Device discovery failed: {}", cause.getMessage());
             return null;
         });
+    }
+
+    /** Visible for tests. */
+    static org.openhab.core.config.discovery.DiscoveryResult buildDiscoveryResult(ThingUID bridgeUID,
+            String deviceLabel, EightSleepApiClient.UserProfileResult profile) {
+        String userId = profile.userId();
+        if (userId == null) {
+            return null;
+        }
+        String side = normalizeSide(profile.currentDevice() != null ? profile.currentDevice().side : null);
+        String sanitizedUserId = sanitizeForThingId(userId);
+        // The (type, bridgeUID, id) overload yields ...:bedSide:<bridgeId>:<userId>,
+        // keeping the user id as the last segment.
+        ThingUID thingUid = new ThingUID(THING_TYPE_UID_BED_SIDE, bridgeUID, sanitizedUserId);
+
+        Map<String, Object> properties = new HashMap<>();
+        properties.put(CONFIG_USER_ID, userId);
+        properties.put("label", side);
+
+        String label = "Eight Sleep Bed Side (" + switch (side) {
+            case "left" -> "Left";
+            case "right" -> "Right";
+            default -> "Both";
+        } + ") - " + deviceLabel;
+
+        return DiscoveryResultBuilder.create(thingUid)
+                .withProperties(properties).withRepresentationProperty(CONFIG_USER_ID)
+                .withBridge(bridgeUID).withLabel(label).build();
+    }
+
+    /**
+     * Normalizes a raw bed side to "left"/"right"/"solo"; null/unknown sides
+     * default to "left" like the upstream client.
+     * Visible for tests.
+     */
+    static String normalizeSide(@Nullable String rawSide) {
+        if (rawSide == null || rawSide.isBlank()) {
+            return "left";
+        }
+        String side = rawSide.trim().toLowerCase();
+        return "right".equals(side) || "solo".equals(side) ? side : "left";
+    }
+
+    /**
+     * Replaces characters that are illegal in a thing ID segment.
+     * Visible for tests.
+     */
+    static String sanitizeForThingId(String userId) {
+        return userId.replaceAll("[^a-zA-Z0-9_-]", "_");
     }
 }

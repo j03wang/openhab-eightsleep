@@ -12,7 +12,7 @@ writes one pretty-printed JSON file per endpoint into the output directory:
     auth-tokens.json      (response shape only; token redacted)
     users-me.json
     household-summary.json
-    device-data.json
+    devices-id.json
     device-users.json
     trends-days.json
     temperature.json
@@ -152,7 +152,7 @@ def main() -> int:
 
     # ---- device ----
     status, body = http("GET", f"{CLIENT_API}/devices/{device_id}", token)
-    save(args.out, "device-data", status, body)
+    save(args.out, "devices-id", status, body)
 
     status, body = http(
         "GET",

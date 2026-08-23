@@ -70,10 +70,15 @@ public final class HeatingLevelConversion {
 
     /**
      * Converts a temperature to the closest raw heating level (-100..100).
+     * Non-finite input (NaN/infinity) maps to level 0, the neutral midpoint.
      *
+     * @param temperature the temperature to convert
      * @param fahrenheit true if the given temperature is in Fahrenheit, false for Celsius
      */
     public static int temperatureToLevel(double temperature, boolean fahrenheit) {
+        if (!Double.isFinite(temperature)) {
+            return 0;
+        }
         double[] levels = fahrenheit ? FAHRENHEIT_LEVELS : CELSIUS_LEVELS;
         double[] values = fahrenheit ? FAHRENHEIT_VALUES : CELSIUS_VALUES;
 

@@ -27,4 +27,21 @@
   <modules>
     <module>org.openhab.binding.eightsleep</module>
   </modules>
+
+  <build>
+    <pluginManagement>
+      <plugins>
+        <!-- Unpinned, older Maven distributions fall back to compiler-plugin 3.1
+             (source/target 5) which fails on this Java 21 code base. -->
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-compiler-plugin</artifactId>
+          <version>3.13.0</version>
+          <configuration>
+            <release>21</release>
+          </configuration>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+  </build>
 </project>

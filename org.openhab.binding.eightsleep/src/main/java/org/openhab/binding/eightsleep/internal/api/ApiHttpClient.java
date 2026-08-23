@@ -112,7 +112,7 @@ public class ApiHttpClient {
         return URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
 
-    private static String truncate(@Nullable String body) {
+    static String truncate(@Nullable String body) {
         if (body == null) {
             return "";
         }

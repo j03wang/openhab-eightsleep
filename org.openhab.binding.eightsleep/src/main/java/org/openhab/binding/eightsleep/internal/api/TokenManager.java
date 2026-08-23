@@ -43,25 +43,61 @@ public class TokenManager {
     private final String password;
     private final String clientId;
     private final String clientSecret;
+    private final AuthTransport authTransport;
 
-    private @Nullable String accessToken;
-    private @Nullable String userId;
+    /**
+     * Seam for tests: performs the OAuth token request. Production posts JSON to
+     * {@link ApiConstants#AUTH_URL}; tests substitute canned responses.
+     */
+    public interface AuthTransport {
+        CompletableFuture<String> authenticate(String clientId, String clientSecret, String username,
+                String password);
+    }
+
+    /** Production transport: POST the snake_case OAuth body as raw JSON. */
+    static final AuthTransport DEFAULT_AUTH_TRANSPORT = (clientId, clientSecret, username, password) -> ApiHttpClient
+            .postJson(ApiConstants.AUTH_URL, AuthRequest.of(clientId, clientSecret, username, password), null);
+
     private volatile long expiryEpochSeconds;
+    private final java.time.Clock clock;
 
     public TokenManager(String username, String password, @Nullable String clientId, @Nullable String clientSecret) {
+        this(username, password, clientId, clientSecret, DEFAULT_AUTH_TRANSPORT, java.time.Clock.systemUTC());
+    }
+
+    /**
+     * Test seam: injects the auth transport so token behaviour can be exercised
+     * without network access.
+     */
+    public TokenManager(String username, String password, @Nullable String clientId, @Nullable String clientSecret,
+            AuthTransport authTransport) {
+        this(username, password, clientId, clientSecret, authTransport, java.time.Clock.systemUTC());
+    }
+
+    /**
+     * Test seam: injects both the auth transport and the clock so expiry
+     * behaviour can be exercised deterministically.
+     */
+    public TokenManager(String username, String password, @Nullable String clientId, @Nullable String clientSecret,
+            AuthTransport authTransport, java.time.Clock clock) {
         this.username = username;
         this.password = password;
         // Defaults match the values used by the official mobile app
         this.clientId = clientId != null && !clientId.isBlank() ? clientId : ApiConstants.KNOWN_CLIENT_ID;
         this.clientSecret = clientSecret != null && !clientSecret.isBlank() ? clientSecret
                 : ApiConstants.KNOWN_CLIENT_SECRET;
+        this.authTransport = authTransport;
+        this.clock = clock;
     }
+
+    private @Nullable String accessToken;
+    private @Nullable String userId;
 
     /**
      * Returns a valid access token, refreshing it first when necessary.
      */
     public synchronized String getAccessToken() throws ApiException {
-        if (accessToken == null || Instant.now().getEpochSecond() + TOKEN_EXPIRY_BUFFER_SECONDS >= expiryEpochSeconds) {
+        if (accessToken == null || clock.instant().getEpochSecond() + TOKEN_EXPIRY_BUFFER_SECONDS >= expiryEpochSeconds) {
             refresh();
         }
         String token = accessToken;
@@ -82,9 +118,14 @@ public class TokenManager {
         return userId;
     }
 
+    /** Seconds until the current token expires (negative when already expired). */
+    public synchronized long secondsUntilExpiry() {
+        return expiryEpochSeconds - clock.instant().getEpochSecond();
+    }
+
     private void refresh() throws ApiException {
         CompletableFuture<AuthResponse> future = new CompletableFuture<>();
-        ApiHttpClient.postJson(ApiConstants.AUTH_URL, AuthRequest.of(clientId, clientSecret, username, password), null)
+        authTransport.authenticate(clientId, clientSecret, username, password)
                 .thenAccept(body -> {
                     AuthResponse response = GsonHelper.fromJson(body, AuthResponse.class);
                     if (response != null) {
@@ -115,7 +156,7 @@ public class TokenManager {
         if (accessToken == null || expiresIn == null) {
             throw new ApiException("Authentication response missing token fields");
         }
-        this.expiryEpochSeconds = Instant.now().getEpochSecond() + expiresIn.longValue();
+        this.expiryEpochSeconds = clock.instant().getEpochSecond() + expiresIn.longValue();
         logger.debug("Obtained new access token for {}, expires in {}s", username, expiresIn);
     }
 

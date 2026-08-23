@@ -35,6 +35,7 @@ Manual setup is also possible: create a `bedSide` thing under the account bridge
 | `userRefreshInterval`   | 30      | Polling interval in seconds for sleep data.                                 |
 | `baseRefreshInterval`   | 60      | Polling interval in seconds for base data.                                  |
 | `temperatureUnit`       | C       | Unit for plain-number temperature commands (`C` or `F`).                    |
+| `deviceId`              | –       | Eight Sleep device (pod) to bind. Leave empty for the first device; set it when your account has more than one pod (advanced). |
 
 ## Channels
 
@@ -44,16 +45,16 @@ Channels are grouped on each `bedSide` thing:
 
 | Channel            | Type                | Description                                    |
 |--------------------|---------------------|------------------------------------------------|
-| `bedTemperature`   | `Number:Temperature`| Current bed surface temperature (read-only).   |
+| `bedTemperature`   | `Number:Temperature`| Current temperature measured at the mattress surface (read-only). |
 | `targetTemperature`| `Number:Temperature`| Target bed temperature. **Command it to heat/cool.** |
 | `heartRate`        | `Number:Frequency`  | Current heart rate.                            |
 | `respiratoryRate`  | `Number`            | Current respiratory rate (breaths/min).        |
 | `sleepScore`       | `Number:Dimensionless` | Sleep score of the current/most recent session. |
 | `qualityScore`     | `Number:Dimensionless` | Sleep quality score.                        |
 | `routineScore`     | `Number:Dimensionless` | Sleep routine score.                        |
-| `hrv`              | `Number`            | Heart rate variability.                        |
+| `hrv`              | `Number:Time`       | Heart rate variability.                        |
 | `breathRate`       | `Number`            | Breathing rate from sleep quality data.        |
-| `sleepStage`       | `String`            | `inProgress` or `complete`.                    |
+| `sleepStage`       | `String`            | Current stage: `awake`, `light`, `deep`, `rem` (derived from the session's stage segments). |
 | `sessionStart`     | `DateTime`          | Start of the current session.                  |
 | `sessionEnd`       | `DateTime`          | End of the current session.                    |
 
@@ -78,7 +79,6 @@ To control a different alarm, change which one fires next in the Eight Sleep app
 | `sleepScore`           | `Number:Dimensionless` | Sleep score of the last session.|
 | `qualityScore`         | `Number:Dimensionless` | Quality score of the last session. |
 | `routineScore`         | `Number:Dimensionless` | Routine score of the last session. |
-| `fitnessScore`         | `Number:Dimensionless` | Fitness score of the last session. |
 | `timeSlept`            | `Number:Time`          | Total sleep duration.           |
 | `lightSleepDuration`   | `Number:Time`          | Light sleep duration.           |
 | `deepSleepDuration`    | `Number:Time`          | Deep sleep duration.            |
@@ -170,13 +170,16 @@ The following upstream features are implemented in the API layer but do not have
 - Creating brand-new one-off alarms (`POST /alarms` with vibration/thermal settings)
 - Speaker media control (state is polled; play/pause/volume/track methods exist)
 - Setting which bed side a user controls
+- Smart schedule per-stage heating levels (`setSmartHeatingLevel`: bedtime/initial/final
+  stage levels are read-modify-written via the temperature resource)
 
 ## Troubleshooting
 
 - Watch live logs with `log:tail` (or `journalctl -u openhab -f`) while scanning.
 - Discovery failures are logged at WARN for the `org.openhab.binding.eightsleep` logger.
 - If authentication fails, verify your credentials in the Eight Sleep mobile app first.
-- The binding talks to `client-api.8slp.net`, `app-api.8slp.net` and `auth-api.8slp.net`. Ensure outbound HTTPS is allowed.
+- A bed side going OFFLINE with "Polling has been failing" means cached values are stale; check the connection to `client-api.8slp.net`, `app-api.8slp.net` and `auth-api.8slp.net`.
+- A bed side going OFFLINE with "No data is being polled for this userId" usually means the userId configuration is wrong; re-run discovery.
 - Accounts without an active subscription get HTTP 403 from the alarms endpoint; the binding skips alarm data gracefully in that case.
 
 ## Building

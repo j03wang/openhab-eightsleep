@@ -68,7 +68,6 @@ public final class EightSleepBindingConstants {
     public static final String CHANNEL_HRV = "hrv";
     public static final String CHANNEL_BREATH_RATE = "breathRate";
     public static final String CHANNEL_SLEEP_SCORE = "sleepScore";
-    public static final String CHANNEL_FITNESS_SCORE = "fitnessScore";
     public static final String CHANNEL_QUALITY_SCORE = "qualityScore";
     public static final String CHANNEL_ROUTINE_SCORE = "routineScore";
     public static final String CHANNEL_TIME_SLEPT = "timeSlept";
@@ -88,7 +87,7 @@ public final class EightSleepBindingConstants {
     public static final String CHANNEL_REMAINING_TIME = "heatingRemainingTime";
 
     // base channels
-    public static final String CHANNEL_BASE_PRESET = "basePreset";
+    public static final String CHANNEL_BASE_PRESET = "preset";
     public static final String CHANNEL_HEAD_ANGLE = "headAngle";
     public static final String CHANNEL_FEET_ANGLE = "feetAngle";
     public static final String CHANNEL_SNORE_MITIGATION = "snoreMitigation";
@@ -122,14 +121,4 @@ public final class EightSleepBindingConstants {
 
     // switch/control channels
     public static final String CHANNEL_SIDE_POWER = "sidePower";
-
-    // commands for heating state channel
-    public static final String HEATING_STATE_OFF = "off";
-    public static final String HEATING_STATE_SMART = "smart";
-
-    // sleep stage options
-    public static final String SLEEP_STAGE_CURRENT = "current";
-    public static final String SLEEP_STAGE_BEDTIME = "bedTimeLevel";
-    public static final String SLEEP_STAGE_INITIAL = "initialSleepLevel";
-    public static final String SLEEP_STAGE_FINAL = "finalSleepLevel";
 }

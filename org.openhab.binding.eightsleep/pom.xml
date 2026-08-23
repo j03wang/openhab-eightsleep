@@ -84,7 +84,7 @@
       <scope>test</scope>
     </dependency>
 
-    <!-- explicit test libs (the bom lists them OSGi-style; plain Maven needs concrete artifacts) -->
+    <!-- test libs; plain Maven needs concrete artifacts beyond the OSGi-style bom -->
     <dependency>
       <groupId>junit</groupId>
       <artifactId>junit</artifactId>

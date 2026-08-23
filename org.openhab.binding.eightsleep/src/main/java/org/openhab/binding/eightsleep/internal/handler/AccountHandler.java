@@ -65,6 +65,8 @@ public class AccountHandler extends BaseBridgeHandler {
     private @Nullable EightSleepApiClient apiClient;
 
     private final List<ScheduledFuture<?>> pollJobs = new CopyOnWriteArrayList<>();
+    /** Pending reconnect attempt; cancelled on dispose and before scheduling a new one. */
+    private @Nullable ScheduledFuture<?> reconnectJob;
 
     // cached state, read by bed side handlers
     private volatile @Nullable DeviceData deviceData;
@@ -72,8 +74,9 @@ public class AccountHandler extends BaseBridgeHandler {
     private volatile boolean speakerAvailable;
 
     private final Map<String, UserData> userDataByUser = new ConcurrentHashMap<>();
+    /** userId -> number of bedSide things currently registered for it. */
+    private final Map<String, Integer> registrationCountByUser = new ConcurrentHashMap<>();
     private final Map<String, String> sideByUserId = new ConcurrentHashMap<>();
-    private final Map<String, String> userLabelById = new HashMap<>();
     private volatile @Nullable String deviceId;
 
     public AccountHandler(Bridge bridge) {
@@ -125,13 +128,28 @@ public class AccountHandler extends BaseBridgeHandler {
     private void fetchInitialStructure(AccountConfiguration config, EightSleepApiClient client) {
         client.getHouseholdDevices().thenAccept(devices -> {
             if (devices.isEmpty()) {
-                logger.warn("No Eight Sleep devices found for this account");
-                updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.CONFIGURATION_ERROR,
+                // A transient API hiccup can return an empty household - retry like any other
+                // failure instead of latching a terminal CONFIGURATION_ERROR.
+                logger.debug("No Eight Sleep devices found for this account (yet); retrying");
+                updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR,
                         "@text/account.status.no-devices");
+                scheduleReconnect(config);
                 return;
             }
-            String firstDeviceId = devices.keySet().iterator().next();
-            deviceId = firstDeviceId;
+            // Prefer the configured device; otherwise fall back to the first device in
+            // sorted order so multi-pod accounts get a stable choice across restarts.
+            String configured = config.deviceId != null ? config.deviceId.trim() : "";
+            String chosen;
+            if (!configured.isBlank() && devices.containsKey(configured)) {
+                chosen = configured;
+            } else if (!configured.isBlank()) {
+                logger.warn("Configured deviceId '{}' not found for this account; using '{}'. Known devices: {}",
+                        configured, devices.keySet().stream().sorted().findFirst().orElse(""), devices);
+                chosen = devices.keySet().stream().sorted().findFirst().orElseThrow();
+            } else {
+                chosen = devices.keySet().stream().sorted().findFirst().orElseThrow();
+            }
+            deviceId = chosen;
 
             Map<String, String> properties = new HashMap<>(thing.getProperties());
             properties.put(EightSleepBindingConstants.CONFIG_USERNAME, config.username);
@@ -140,7 +158,7 @@ public class AccountHandler extends BaseBridgeHandler {
             }
             updateProperties(properties);
 
-            startPolling(config, client, firstDeviceId);
+            startPolling(config, client, chosen);
             updateStatus(ThingStatus.ONLINE);
         }).exceptionally(ex -> {
             Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
@@ -160,8 +178,7 @@ public class AccountHandler extends BaseBridgeHandler {
 
         pollJobs.add(scheduler.scheduleWithFixedDelay(() -> pollDeviceData(client, devId), 0, deviceInterval,
                 TimeUnit.SECONDS));
-        pollJobs.add(scheduler.scheduleWithFixedDelay(() -> pollUserData(client), userInterval / 2, userInterval,
-                TimeUnit.SECONDS));
+        pollJobs.add(scheduler.scheduleWithFixedDelay(() -> pollUserData(client), 0, userInterval, TimeUnit.SECONDS));
         pollJobs.add(
                 scheduler.scheduleWithFixedDelay(() -> pollBaseData(client), baseInterval, baseInterval, TimeUnit.SECONDS));
         pollJobs.add(scheduler.scheduleWithFixedDelay(() -> pollAwayState(client, devId), 2, deviceInterval,
@@ -223,8 +240,12 @@ public class AccountHandler extends BaseBridgeHandler {
                 return null;
             });
 
+            Instant pollStartedAt = Instant.now();
             client.getAlarms(userId).thenAccept(alarms -> {
                 UserData data = userDataByUser.computeIfAbsent(userId, k -> new UserData());
+                // Stamp with the START time: any command issued while this request was
+                // in flight is newer and must win the LWW merge.
+                data.alarmsPolledAt = pollStartedAt;
                 data.alarms.clear();
                 data.alarms.addAll(alarms);
             }).exceptionally(ex -> {
@@ -235,14 +256,20 @@ public class AccountHandler extends BaseBridgeHandler {
                     logger.debug("Alarms require a subscription for user {}; skipping", userId);
                     UserData data = userDataByUser.computeIfAbsent(userId, k -> new UserData());
                     data.alarms.clear();
+                    // Stamp so the LWW merge knows this empty list is fresh - otherwise the
+                    // alarm channels would keep showing a stale alarm forever.
+                    data.alarmsPolledAt = pollStartedAt;
                 } else {
                     logger.debug("Failed to refresh alarms for user {}: {}", userId, cause.getMessage());
                 }
                 return null;
             });
 
+            java.time.Instant tempPollStartedAt = Instant.now();
             client.getTemperature(userId).thenAccept(temp -> {
                 UserData data = userDataByUser.computeIfAbsent(userId, k -> new UserData());
+                // Stamp with the START time so commands issued mid-flight win LWW.
+                data.temperatureAt = tempPollStartedAt;
                 data.temperature = temp;
             }).exceptionally(ex -> {
                 logger.debug("Failed to refresh temperature data for user {}", userId);
@@ -262,11 +289,9 @@ public class AccountHandler extends BaseBridgeHandler {
 
     /**
      * Polls which users are currently in away mode and updates their cached state.
-     */
-    /**
      * Away-state read model (verified against live captures):
-     * away  = user in awaySides AND removed from their side slot
-     * present = user occupies a side slot (even though awaySides still lists them)
+     * away = user in awaySides AND removed from their side slot;
+     * present = user occupies a side slot (even though awaySides still lists them).
      */
     private void pollAwayState(EightSleepApiClient client, String devId) {
         client.getDeviceUsers(devId).thenAccept(users -> {
@@ -279,9 +304,16 @@ public class AccountHandler extends BaseBridgeHandler {
             }
             candidates.addAll(users.awaySides.values());
 
+            Instant observedAt = Instant.now();
             for (String uid : candidates) {
                 UserData data = userDataByUser.computeIfAbsent(uid, k -> new UserData());
-                data.awayMode = users.isAway(uid);
+                boolean away = users.isAway(uid);
+                java.time.Instant commandedAt = data.awayCommandedAt;
+                // last-write-wins: ignore a polled value that predates a command
+                if (acceptsPolledAway(commandedAt, observedAt)) {
+                    data.awayMode = away;
+                    data.awayPolledAt = observedAt;
+                }
             }
             awayPolledOnce = true;
         }).exceptionally(ex -> {
@@ -292,16 +324,22 @@ public class AccountHandler extends BaseBridgeHandler {
     }
 
     private volatile boolean awayPolledOnce;
-    private volatile String lastAwaySummary = "";
+
+    /**
+     * Resolves the configured user-data poll interval (clamped like startPolling),
+     * so consumers can derive data-staleness thresholds from the same cadence.
+     */
+    public long userRefreshIntervalSeconds() {
+        return clampInterval(getConfigAs(AccountConfiguration.class).userRefreshInterval, 15, 600);
+    }
 
     /**
      * Records the commanded away state so it survives bridge restarts.
      */
     public void setLastKnownAwayMode(String userId, boolean away) {
-        UserData data = userDataByUser.get(userId);
-        if (data != null) {
-            data.awayMode = away;
-        }
+        UserData data = userDataByUser.computeIfAbsent(userId, k -> new UserData());
+        data.awayMode = away;
+        data.awayCommandedAt = Instant.now();
         awayPolledOnce = true;
     }
 
@@ -337,8 +375,9 @@ public class AccountHandler extends BaseBridgeHandler {
         }
     }
 
-    private void scheduleReconnect(AccountConfiguration config) {
-        scheduler.schedule(() -> {
+    private synchronized void scheduleReconnect(AccountConfiguration config) {
+        cancelReconnect();
+        reconnectJob = scheduler.schedule(() -> {
             if (getThing().getStatus() != ThingStatus.REMOVING) {
                 logger.debug("Retrying Eight Sleep connection");
                 startAuthentication(config);
@@ -346,8 +385,17 @@ public class AccountHandler extends BaseBridgeHandler {
         }, AUTH_RETRY_SECONDS, TimeUnit.SECONDS);
     }
 
+    private synchronized void cancelReconnect() {
+        ScheduledFuture<?> job = reconnectJob;
+        if (job != null && !job.isCancelled()) {
+            job.cancel(false);
+        }
+        reconnectJob = null;
+    }
+
     @Override
     public void dispose() {
+        cancelReconnect();
         stopPolling();
         super.dispose();
     }
@@ -398,38 +446,34 @@ public class AccountHandler extends BaseBridgeHandler {
     /**
      * Registers a bed side thing with the account so its user gets polled.
      *
-     * @return true when the user id was registered (first time)
+     * @return true when this was the first registration for the user id
      */
     public boolean registerBedSide(String userId, String side) {
-        sideByUserId.putIfAbsent(userId, side);
-        return userDataByUser.containsKey(userId);
-    }
-
-    public void unregisterBedSide(String userId) {
-        // keep other things that may reference the same user
+        Integer count = registrationCountByUser.merge(userId, 1, Integer::sum);
+        if (count == 1) {
+            sideByUserId.put(userId, side);
+        }
+        return count == 1;
     }
 
     /**
-     * Resolves the effective side ("left"/"right") for a user id, defaulting via the
-     * registered mapping or falling back to "left" like the original client does.
+     * Unregisters a bed side thing. Polling and cached data for the user are dropped
+     * only when the last thing referencing the user goes away.
      */
-    public String resolveSide(String userId, String configuredSide) {
-        return !configuredSide.isBlank() ? configuredSide.toLowerCase()
-                : sideByUserId.getOrDefault(userId, "left");
+    public void unregisterBedSide(String userId) {
+        Integer count = registrationCountByUser.computeIfPresent(userId, (k, v) -> v > 1 ? v - 1 : null);
+        if (count == null) {
+            // last reference gone: stop polling and forget the cached data
+            sideByUserId.remove(userId);
+            userDataByUser.remove(userId);
+        }
     }
 
-    /**
+        /**
      * Returns the temperature unit as "c"/"f" based on the bridge configuration.
      */
     public char getTemperatureUnit(char fallback) {
-        String unit = getConfigAs(AccountConfiguration.class).temperatureUnit;
-        if (!unit.isBlank()) {
-            char first = Character.toLowerCase(unit.trim().charAt(0));
-            if (first == 'c' || first == 'f') {
-                return first;
-            }
-        }
-        return fallback;
+        return parseTemperatureUnit(getConfigAs(AccountConfiguration.class).temperatureUnit, fallback);
     }
 
     /**
@@ -437,15 +481,28 @@ public class AccountHandler extends BaseBridgeHandler {
      */
     public static class UserData {
         public final List<EightSleepApiClient.Alarm> alarms = new CopyOnWriteArrayList<>();
+        /** When {@code alarms} was last fetched - used for last-write-wins merging. */
+        public volatile java.time.Instant alarmsPolledAt;
         public volatile @Nullable BaseData baseData;
         public volatile @Nullable PlayerState playerState;
         public volatile EightSleepApiClient.PillowData pillowData;
         /** Raw /temperature payload (currentLevel, smart schedule, ...). */
         public volatile com.google.gson.JsonObject temperature;
+        /** When {@code temperature} was fetched - used for last-write-wins merging. */
+        public volatile java.time.Instant temperatureAt;
         /** Raw v1 trends "days" payload, parsed defensively on read. */
         public volatile com.google.gson.JsonArray trendDays = new com.google.gson.JsonArray();
         public volatile boolean awayMode;
-        public volatile @Nullable Instant lastUpdated;
+        /** Instant of the last command that set awayMode (for last-write-wins). */
+        public volatile java.time.Instant awayCommandedAt;
+        /** Instant of the last successful away-state poll; epoch means "never". */
+        public volatile java.time.Instant awayPolledAt = Instant.EPOCH;
+        /**
+         * When cached data was last (re)freshed - the construction moment counts as
+         * fresh so a just-created entry is not immediately flagged stale; every
+         * completed poll overwrites it.
+         */
+        public volatile java.time.Instant lastUpdated = Instant.now();
 
         /**
          * Defensive parser over the raw trends payload. Session 0 is the current one.
@@ -464,7 +521,33 @@ public class AccountHandler extends BaseBridgeHandler {
         return value != null && !value.isBlank() ? value : null;
     }
 
-    private static long clampInterval(long value, long min, long max) {
+    /** Grace window: a poll observed this soon after a command is considered pre-command. */
+    static final long AWAY_COMMAND_GRACE_SECONDS = 2;
+
+    /**
+     * Whether an away-state observation may overwrite a commanded value: a poll
+     * observed within the grace window after a command is treated as pre-command
+     * data and rejected.
+     */
+    static boolean acceptsPolledAway(java.time.@Nullable Instant commandedAt, java.time.Instant observedAt) {
+        return commandedAt == null || !observedAt.minusSeconds(AWAY_COMMAND_GRACE_SECONDS).isBefore(commandedAt);
+    }
+
+    /**
+     * Resolves the temperature unit from a configuration string ("C"/"F", any case,
+     * tolerating whitespace). Returns {@code fallback} for blank/unknown values.
+     */
+    public static char parseTemperatureUnit(String unit, char fallback) {
+        if (unit != null && !unit.isBlank()) {
+            char first = Character.toLowerCase(unit.trim().charAt(0));
+            if (first == 'c' || first == 'f') {
+                return first;
+            }
+        }
+        return fallback;
+    }
+
+    static long clampInterval(long value, long min, long max) {
         return Math.max(min, Math.min(max, value));
     }
 }

@@ -62,6 +62,13 @@
 				<description>Unit used to interpret plain number commands for temperatures. Leave empty to use
 				 Celsius. Quantity commands always carry their own unit.</description>
 			</parameter>
+			<parameter name="deviceId" type="text" required="false">
+				<label>Device ID</label>
+				<advanced>true</advanced>
+				<description>The Eight Sleep device (pod) to bind. Leave empty to use the first device of the
+				 account; set it when your account has more than one pod. Discovered devices are listed in the
+				 thing properties.</description>
+			</parameter>
 		</config-description>
 	</bridge-type>
 
@@ -144,7 +151,6 @@
 			<channel id="sleepScore" typeId="sleepScore"/>
 			<channel id="qualityScore" typeId="qualityScore"/>
 			<channel id="routineScore" typeId="routineScore"/>
-			<channel id="fitnessScore" typeId="fitnessScore"/>
 			<channel id="timeSlept" typeId="timeSlept"/>
 			<channel id="lightSleepDuration" typeId="lightSleepDuration"/>
 			<channel id="deepSleepDuration" typeId="deepSleepDuration"/>
@@ -223,7 +229,7 @@
 			<tag>Setpoint</tag>
 			<tag>Temperature</tag>
 		</tags>
-		<state min="13" max="43" step="0.5" pattern="%.1f %unit%" readOnly="false"/>
+		<state step="0.5" pattern="%.1f %unit%" readOnly="false"/>
 	</channel-type>
 
 	<channel-type id="roomTemperature">
@@ -242,11 +248,7 @@
 		<item-type>Number:Frequency</item-type>
 		<label>Heart Rate</label>
 		<description>Current heart rate in beats per minute.</description>
-		<state readOnly="true" pattern="%d bpm">
-			<options>
-				<option value="">Heart rate</option>
-			</options>
-		</state>
+		<state readOnly="true" pattern="%d bpm"/>
 	</channel-type>
 
 	<channel-type id="respiratoryRate">
@@ -288,13 +290,6 @@
 		<item-type>Number:Dimensionless</item-type>
 		<label>Sleep Routine Score</label>
 		<description>Sleep routine score as computed by the Eight Sleep cloud.</description>
-		<state readOnly="true" min="0" max="100" pattern="%d %%"/>
-	</channel-type>
-
-	<channel-type id="fitnessScore">
-		<item-type>Number:Dimensionless</item-type>
-		<label>Sleep Fitness Score</label>
-		<description>Sleep fitness score as computed by the Eight Sleep cloud.</description>
 		<state readOnly="true" min="0" max="100" pattern="%d %%"/>
 	</channel-type>
 
@@ -341,8 +336,20 @@
 	<channel-type id="sleepStage">
 		<item-type>String</item-type>
 		<label>Sleep Stage</label>
-		<description>Current stage of the active sleep session (awake, light, deep, rem).</description>
-		<state readOnly="true" pattern="%s"/>
+		<description>Current sleep stage (awake, light, deep, rem) derived from the session's stage segments;
+		 "unknown" while no stage data is available.</description>
+		<tags>
+			<tag>Status</tag>
+		</tags>
+		<state readOnly="true" pattern="%s">
+			<options>
+				<option value="awake">Awake</option>
+				<option value="light">Light</option>
+				<option value="deep">Deep</option>
+				<option value="rem">REM</option>
+				<option value="unknown">Unknown</option>
+			</options>
+		</state>
 	</channel-type>
 
 	<channel-type id="tossesTurns">

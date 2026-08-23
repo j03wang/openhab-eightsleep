@@ -17,6 +17,7 @@ import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -51,10 +52,29 @@ public class EightSleepApiClient {
     public static final int HEATING_LEVEL_MIN = -100;
     public static final int HEATING_LEVEL_MAX = 100;
 
+    /**
+     * Seam for tests: performs an authorized HTTP call. Production delegates to
+     * {@link ApiHttpClient}; tests record URLs/bodies and return canned responses.
+     */
+    public interface Transport {
+        CompletableFuture<String> send(String method, String url, @Nullable String jsonBody,
+                @Nullable String accessToken);
+    }
+
     private final TokenManager tokenManager;
+    private final Transport transport;
 
     public EightSleepApiClient(TokenManager tokenManager) {
+        this(tokenManager, ApiHttpClient::send);
+    }
+
+    /**
+     * Public test seam: substitutes the HTTP layer so retry behaviour can be
+     * exercised without network access.
+     */
+    public EightSleepApiClient(TokenManager tokenManager, Transport transport) {
         this.tokenManager = tokenManager;
+        this.transport = transport;
     }
 
     // ==================== data fetching ====================
@@ -102,7 +122,12 @@ public class EightSleepApiClient {
 
     /** Static for contract tests. */
     public static UserProfileResult parseUserProfile(String userId, String body) {
-        UserProfileEnvelope envelope = GsonHelper.fromJson(body, UserProfileEnvelope.class);
+        UserProfileEnvelope envelope = null;
+        try {
+            envelope = GsonHelper.fromJson(body, UserProfileEnvelope.class);
+        } catch (RuntimeException e) {
+            LOGGER.debug("Unparseable user profile for {}: {}", userId, e.getMessage());
+        }
         return new UserProfileResult(userId,
                 envelope != null && envelope.user != null ? envelope.user.currentDevice : null);
     }
@@ -186,7 +211,9 @@ public class EightSleepApiClient {
 
     /** Static for contract tests. */
     public static Map<String, String> parseHouseholdDevices(String body) {
-        Map<String, String> devices = new HashMap<>();
+        // LinkedHashMap: discovery and the account bridge pick the FIRST device,
+        // so API encounter order must be preserved for deterministic choices.
+        Map<String, String> devices = new LinkedHashMap<>();
         HouseholdSummary summary = GsonHelper.fromJson(body, HouseholdSummary.class);
         if (summary != null && summary.households != null) {
             for (Household household : summary.households) {
@@ -233,6 +260,11 @@ public class EightSleepApiClient {
     public static class DeviceUsers {
         public @Nullable String leftUserId;
         public @Nullable String rightUserId;
+        /**
+         * Side -> userId map from the {@code awaySides} filter. NOTE: in live captures
+         * the KEYS are "leftUserId"/"rightUserId" (not "left"/"right") - only the
+         * VALUES (user ids) are meaningful, which is all {@link #isAway} uses.
+         */
         public Map<String, String> awaySides = new HashMap<>();
 
         /**
@@ -262,6 +294,24 @@ public class EightSleepApiClient {
                 + "&to=" + end.format(DateTimeFormatter.ISO_LOCAL_DATE)
                 + "&include-main=false&include-all-sessions=true&model-version=v2";
         return authorizedGet(url).thenApply(EightSleepApiClient::parseTrendDays);
+    }
+
+    /**
+     * Rolls a stale (already-past) timestamp forward in whole weeks (UTC arithmetic)
+     * until it lands after {@code now}. Used for disabled repeating alarms whose
+     * server timestamp stopped updating; keeps them ordered correctly without
+     * inventing state. Returns null when there is no base timestamp to roll from.
+     */
+    public static java.time.@Nullable Instant rollToNextWeek(java.time.@Nullable Instant ts,
+            java.time.Instant now) {
+        if (ts == null) {
+            return null;
+        }
+        java.time.Instant rolled = ts;
+        while (rolled.isBefore(now)) {
+            rolled = rolled.plus(java.time.Duration.ofDays(7));
+        }
+        return rolled;
     }
 
     /** Static for contract tests: extracts the raw "days" array from a trends body. */
@@ -595,22 +645,7 @@ public class EightSleepApiClient {
     }
 
     private CompletableFuture<Void> authorizedPutRaw(String url, String rawJsonBody) {
-        return supplyToken().thenCompose(token -> ApiHttpClient.send("PUT", url, rawJsonBody, token))
-                .handle((body, ex) -> {
-                    if (ex == null) {
-                        return CompletableFuture.completedFuture(body);
-                    }
-                    Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
-                    if (cause instanceof ApiException apiEx && apiEx.isUnauthorized()) {
-                        LOGGER.debug("401 received, refreshing token and retrying once");
-                        tokenManager.invalidate();
-                        return supplyToken().thenCompose(
-                                freshToken -> ApiHttpClient.send("PUT", url, rawJsonBody, freshToken));
-                    }
-                    CompletableFuture<String> failed = new CompletableFuture<>();
-                    failed.completeExceptionally(ex);
-                    return failed;
-                }).thenCompose(future -> future).thenApply(v -> null);
+        return withAuthRetry(token -> transport.send("PUT", url, rawJsonBody, token)).thenApply(v -> null);
     }
 
     /**
@@ -671,18 +706,16 @@ public class EightSleepApiClient {
     // ==================== plumbing ====================
 
     private CompletableFuture<String> authorizedGet(String url) {
-        return withAuthRetry(token -> ApiHttpClient.getJson(url, token));
+        return withAuthRetry(token -> transport.send("GET", url, null, token));
     }
 
     private CompletableFuture<String> authorizedPost(String url, @Nullable Object body) {
-        return withAuthRetry(token -> ApiHttpClient.postJson(url, body, token));
+        return withAuthRetry(token -> transport.send("POST", url, GsonHelper.toJson(body), token));
     }
 
     private CompletableFuture<String> authorizedPut(String url, @Nullable Object body) {
-        return withAuthRetry(token -> ApiHttpClient.putJson(url, body, token));
+        return withAuthRetry(token -> transport.send("PUT", url, GsonHelper.toJson(body), token));
     }
-
-
 
     /**
      * Runs the request with a valid access token. On a 401 failure the token is
@@ -855,6 +888,77 @@ public class EightSleepApiClient {
         public @Nullable Boolean skipNext;
         public @Nullable Boolean snoozing;
         public @Nullable String nextTimestamp;
+
+        /**
+         * Computes when this alarm fires next, WITHOUT relying on {@code nextTimestamp}
+         * (which goes stale or null for disabled alarms).
+         *
+         * Repeating alarms are derived from {@code time} + {@code repeat.weekDays} in
+         * {@code zone}; a repeat flag with no active weekday is treated as daily.
+         * One-shot alarms (repeat disabled) use nextTimestamp, since a bare HH:mm:ss
+         * carries no date.
+         */
+        public java.time.@Nullable Instant computeNextRun(java.time.ZoneId zone) {
+            return computeNextRun(zone, java.time.Instant.now());
+        }
+
+        /** As above with an injectable clock (testability at any point in the week). */
+        public java.time.@Nullable Instant computeNextRun(java.time.ZoneId zone,
+                java.time.Instant now) {
+            if (time == null || time.isBlank()) {
+                return null;
+            }
+            java.time.LocalTime fireTime = org.openhab.binding.eightsleep.internal.model.TrendParser
+                    .parseTimeOfDay(time);
+            if (fireTime == null) {
+                return null;
+            }
+            boolean repeating = Boolean.TRUE.equals(repeat != null ? repeat.enabled : null);
+            Map<String, Boolean> weekDays = repeat != null ? repeat.weekDays : null;
+
+            if (!repeating) {
+                // One-shot: nextTimestamp is the only date source, but a DISABLED
+                // alarm's stale timestamp (already fired) must not win selection -
+                // roll forward a week so it stays in the ordering as "next week".
+                java.time.Instant serverTs =
+                        org.openhab.binding.eightsleep.internal.model.TrendParser.parseTimestamp(
+                                nextTimestamp);
+                if (serverTs != null && !serverTs.isBefore(now)) {
+                    return serverTs;
+                }
+                return rollToNextWeek(serverTs, now);
+            }
+            boolean[] mask = new boolean[7]; // Mon..Sun
+            boolean anyDay = false;
+            if (weekDays != null) {
+                String[] names = { "monday", "tuesday", "wednesday", "thursday", "friday",
+                        "saturday", "sunday" };
+                for (int i = 0; i < names.length; i++) {
+                    if (Boolean.TRUE.equals(weekDays.get(names[i]))) {
+                        mask[i] = true;
+                        anyDay = true;
+                    }
+                }
+            }
+            if (!anyDay) {
+                java.util.Arrays.fill(mask, true); // repeat enabled, no days = daily
+            }
+            java.time.ZoneId effectiveZone = zone;
+            java.time.LocalDate date = now.atZone(effectiveZone).toLocalDate();
+            for (int addDays = 0; addDays < 8; addDays++) {
+                java.time.LocalDate candidateDate = date.plusDays(addDays);
+                int idx = candidateDate.getDayOfWeek().getValue() - 1; // Monday = 0
+                if (!mask[idx]) {
+                    continue;
+                }
+                java.time.Instant candidate = candidateDate.atTime(fireTime)
+                        .atZone(effectiveZone).toInstant();
+                if (!candidate.isBefore(now)) {
+                    return candidate;
+                }
+            }
+            return null;
+        }
 
         public static class AlarmRepeat {
             public @Nullable Boolean enabled;

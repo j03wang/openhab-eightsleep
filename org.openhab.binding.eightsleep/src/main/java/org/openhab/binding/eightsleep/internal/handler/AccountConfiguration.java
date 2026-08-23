@@ -49,4 +49,10 @@ public class AccountConfiguration {
 
     /** Temperature unit used when reporting temperatures: "C" or "F". Defaults to the openHAB locale unit. */
     public String temperatureUnit = "";
+
+    /**
+     * Eight Sleep device (pod) to bind. Empty means the first device reported by the account; accounts with
+     * more than one pod should set this explicitly.
+     */
+    public String deviceId = "";
 }

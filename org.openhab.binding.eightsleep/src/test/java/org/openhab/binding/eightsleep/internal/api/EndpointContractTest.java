@@ -13,12 +13,12 @@
 package org.openhab.binding.eightsleep.internal.api;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
@@ -50,14 +50,12 @@ public class EndpointContractTest {
 
     private static final String FIXTURE_DIR = System.getProperty("eightsleep.fixtures", "target/test-data");
 
-    /**
-     * Loads a fixture by name, preferring a live capture over the embedded sample.
-     */
     /** True when a live capture exists for this endpoint (assert shape, not values). */
     private static boolean isLive(String name) {
         return java.nio.file.Files.exists(java.nio.file.Path.of(FIXTURE_DIR, name + ".json"));
     }
 
+    /** Loads a fixture by name, preferring a live capture over the embedded sample. */
     private static String fixture(String name, @Nullable String embeddedSample) {
         try {
             java.nio.file.Path p = java.nio.file.Path.of(FIXTURE_DIR, name + ".json");
@@ -114,15 +112,16 @@ public class EndpointContractTest {
     }
 
     // ==================== GET /users/{id}/trends (v2) ====================
-    // Real shape: {"days":[{presenceStart, presenceEnd, score, processing, tnt,
+    // Real shape (per live capture): {"days":[{presenceStart, presenceEnd, score, tnt,
     // sleepQualityScore:{total, hrv:{current,...}, respiratoryRate:{current,...}},
-    // sleepRoutineScore:{...}, sessions:[{timeseries:{tempBedC:[[ts,val]],...}}]}]}
+    // sleepRoutineScore:{...}, sessions:[{sleepStart, sleepEnd, stages,
+    // timeseries:{tempBedC:[[ts,val]],...}}]}]} - there is NO "processing" flag.
 
     @Test
     public void trendsDaysExtractedAndSessionsNavigated() {
         String body = fixture("trends-days", """
                 {"days":[
-                  {"score":72,"processing":false,"tnt":12,
+                  {"score":72,"tnt":12,
                    "presenceStart":"2026-08-21T23:30:00Z","presenceEnd":"2026-08-22T07:00:00Z",
                    "lightDuration":9000,"deepDuration":6000,"remDuration":4000,
                    "sleepDuration":18000,"presenceDuration":27000,
@@ -133,7 +132,7 @@ public class EndpointContractTest {
                       "tempBedC":[["2026-08-21T23:30:00Z","None"],["2026-08-22T00:00:00Z",29.5]],
                       "tempRoomC":[["2026-08-21T23:30:00Z","None"],["2026-08-22T00:00:00Z",21.3]],
                       "heartRate":[["2026-08-21T23:30:00Z","None"],["2026-08-22T00:00:00Z",58]]}}]},
-                  {"score":80,"processing":true,"tnt":9,
+                  {"score":80,"tnt":9,
                    "presenceStart":"2026-08-22T23:00:00Z",
                    "sleepQualityScore":{"total":90,"hrv":{"current":44}},
                    "sessions":[{"timeseries":{
@@ -154,8 +153,6 @@ public class EndpointContractTest {
                 org.openhab.binding.eightsleep.internal.model.TrendParser.getString(currentDay, "presenceStart"));
         if (!trendsLive) {
             assertEquals(Double.valueOf(80), score);
-            assertEquals(Boolean.TRUE, org.openhab.binding.eightsleep.internal.model.TrendParser
-                    .getBoolean(currentDay, "processing"));
             assertNotNull(dayStart);
         } else {
             assertNotNull("live day must carry a score", score);
@@ -217,7 +214,6 @@ public class EndpointContractTest {
                     "nextTimestamp":"2026-08-25T06:40:00Z"
                   }],
                  "recommendedAlarm":{}}""");
-        body = fixture("alarms-v2", body);
 
         boolean alarmsLive = isLive("alarms-v2");
         List<EightSleepApiClient.Alarm> alarms = EightSleepApiClient.parseAlarms(body);
@@ -239,11 +235,12 @@ public class EndpointContractTest {
     }
 
     /**
-     * Regression: the toggle payload must wrap settings in "alarmSettings" and emit
-     * whole numbers as JSON integers (the backend rejects -10.0 for Int32 fields).
+     * Regression: the toggle payload must be the BARE alarm object (no
+     * "alarmSettings" wrapper) and emit whole numbers as JSON integers (the
+     * backend rejects -10.0 for Int32 fields).
      */
     @Test
-    public void alarmTogglePayloadWrappedAndIntegerized() throws IOException {
+    public void alarmTogglePayloadIsBareAndIntegerized() throws IOException {
         List<EightSleepApiClient.Alarm> alarms = EightSleepApiClient.parseAlarms("""
                 {"alarms":[{"id":"a1","enabled":true,"time":"07:00:00","snoozing":false,
                  "repeat":{"enabled":false},"thermal":{"enabled":true,"level":-10.0},
@@ -264,13 +261,14 @@ public class EndpointContractTest {
         String liveBody = java.nio.file.Files.readString(java.nio.file.Path.of(
                 java.lang.System.getProperty("eightsleep.fixtures", "target/test-data"),
                 "alarms-v2.json"), StandardCharsets.UTF_8);
-        String liveJson = EightSleepApiClient.buildAlarmUpdateBody(
-                EightSleepApiClient.parseAlarms(liveBody).get(0), true, null);
+        EightSleepApiClient.Alarm liveAlarm = EightSleepApiClient.parseAlarms(liveBody).get(0);
+        String liveJson = EightSleepApiClient.buildAlarmUpdateBody(liveAlarm, true, null);
         for (String required : new String[] { "\"audio\"", "\"smart\"", "\"tags\"", "\"skipNext\"" }) {
             assertTrue("live alarm body must retain " + required, liveJson.contains(required));
         }
-        assertTrue("body id must equal the path id",
-                liveJson.contains("\"id\":\"b7fbf288"));
+        assertNotNull("fixture alarm must carry an id", liveAlarm.id);
+        assertTrue("body id must equal the path id that would be used",
+                liveJson.contains("\"id\":\"" + liveAlarm.id + "\""));
     }
 
     // ==================== GET /users/me & household summary ====================
@@ -315,8 +313,13 @@ public class EndpointContractTest {
         if (isLive("device-users")) {
             // live: away users are REMOVED from side slots, so leftUserId may be null.
             // Verify the away rule instead: awaySides-listed + no side slot = away.
-            String awayId = users.awaySides.values().iterator().next();
-            assertTrue("away user must resolve via isAway", users.isAway(awayId));
+            // (A capture where nobody is away has an empty map - only assert the rule
+            // when there is actually an entry, and never assume the map is non-empty.)
+            assertFalse("awaySides must default to a non-null map", users.awaySides == null);
+            if (!users.awaySides.isEmpty()) {
+                String awayId = users.awaySides.values().iterator().next();
+                assertTrue("away user must resolve via isAway", users.isAway(awayId));
+            }
             return;
         }
         assertEquals("u_left", users.leftUserId);
@@ -330,10 +333,9 @@ public class EndpointContractTest {
         String body = fixture("temperature-all", """
                 {"devices":[
                   {"device":{"specialization":"pod","side":"left","deviceId":"dev1"},"currentLevel":0},
-                  {"device":{"specialization":"pillow","side":"left","deviceId":"pil1"},
-                   "currentLevel":-15,"currentState":{"type":"smart"}}
+                 {"device":{"specialization":"pillow","side":"left","deviceId":"pil1"},
+                  "currentLevel":-15,"currentState":{"type":"smart"}}
                 ]}""");
-        body = fixture("temperature-all", body);
         EightSleepApiClient.PillowData data = EightSleepApiClient.parsePillowData(body);
         if (isLive("temperature-all")) {
             // live capture: shape check only (a pod without a pillow has no pillow entry)
@@ -345,5 +347,84 @@ public class EndpointContractTest {
         assertTrue(pillow.isOn());
         assertEquals(-15, pillow.getLevel());
         assertTrue(data.containsPod("dev1"));
+    }
+
+    // ==================== GET /v1/users/{id}/temperature ====================
+
+    @Test
+    public void temperatureResourceParsed() {
+        String body = fixture("temperature", """
+                {"currentLevel":-20,"currentState":{"type":"smart"},
+                 "smart":{"bedTimeLevel":-32,"initialSleepLevel":-24,"finalSleepLevel":-12}}""");
+        com.google.gson.JsonObject temp = com.google.gson.JsonParser.parseString(body).getAsJsonObject();
+        boolean live = isLive("temperature");
+        assertNotNull(org.openhab.binding.eightsleep.internal.model.TrendParser.getObject(temp, "currentState"));
+        if (!live) {
+            assertEquals(Double.valueOf(-20), org.openhab.binding.eightsleep.internal.model.TrendParser
+                    .getDouble(temp, "currentLevel"));
+            assertEquals("smart", org.openhab.binding.eightsleep.internal.model.TrendParser.getString(
+                    org.openhab.binding.eightsleep.internal.model.TrendParser.getObject(temp, "currentState"),
+                    "type"));
+            // Autopilot fallback source for the target-temperature channel
+            assertEquals(Double.valueOf(-32),
+                    org.openhab.binding.eightsleep.internal.model.TrendParser.getDouble(
+                            org.openhab.binding.eightsleep.internal.model.TrendParser.getObject(temp, "smart"),
+                            "bedTimeLevel"));
+        } else {
+            // live shape check only
+            assertTrue(temp.size() >= 1);
+        }
+    }
+
+    // ==================== GET /v1/users/{id}/base ====================
+
+    @Test
+    public void baseDataParsed() {
+        String body = fixture("base-data", """
+                {"left":{"preset":{"name":"sleep"},"torso":{"currentAngle":30},
+                  "leg":{"currentAngle":8},"inSnoreMitigation":false},
+                 "right":{"preset":{"name":"reading"},"torso":{"currentAngle":10}}}""");
+        org.openhab.binding.eightsleep.internal.model.BaseData data = EightSleepApiClient.parseBaseData(body);
+        if (isLive("base-data")) {
+            // live capture can be an error body ("NoPairedPod"): parser must not throw
+            // and must degrade to an empty-but-valid object.
+            assertNotNull(data);
+            return;
+        }
+        assertEquals("sleep", data.getSide("left").preset.name);
+        assertEquals(Integer.valueOf(30), data.getSide("left").torso.currentAngle);
+        assertEquals(Boolean.FALSE, data.getSide("left").inSnoreMitigation);
+        assertEquals("reading", data.getSide("right").preset.name);
+    }
+
+    /** Error bodies for accounts without a paired pod/base parse to an empty object. */
+    @Test
+    public void baseDataErrorBodyYieldsEmptyObject() {
+        org.openhab.binding.eightsleep.internal.model.BaseData data = EightSleepApiClient
+                .parseBaseData("{\"message\":\"User not paired to device\",\"errorType\":\"NoPairedPod\"}");
+        assertNull(data.getSide("left"));
+        assertNull(data.getSide("right"));
+    }
+
+    // ==================== GET /v1/users/{id}/audio/player ====================
+
+    @Test
+    public void playerStateParsed() {
+        String body = fixture("player-state", """
+                {"state":"Playing","volume":30,
+                 "currentTrack":{"id":"t1","name":"Rain","categoryId":"nature",
+                   "currentPosition":12.5,"trackDuration":600.0},
+                 "hardwareInfo":{"sku":"POD5","hardwareVersion":"hw1","softwareVersion":"sw1"}}""");
+        org.openhab.binding.eightsleep.internal.model.PlayerState state = EightSleepApiClient.parsePlayerState(body);
+        if (isLive("player-state")) {
+            // live capture can be a 404 error body (no speaker): must degrade gracefully
+            assertNotNull(state);
+            return;
+        }
+        assertTrue(state.isPlaying());
+        assertFalse(state.isPaused());
+        assertEquals(30, state.getVolumePercent());
+        assertTrue(state.hasSpeaker());
+        assertEquals("Rain", state.currentTrack.name);
     }
 }
