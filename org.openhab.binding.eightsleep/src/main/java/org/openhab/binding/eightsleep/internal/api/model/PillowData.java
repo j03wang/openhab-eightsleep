@@ -12,14 +12,9 @@
  */
 package org.openhab.binding.eightsleep.internal.api.model;
 
-import java.util.HashMap;
-import java.util.Map;
-
-import org.eclipse.jdt.annotation.NonNullByDefault;
-import org.eclipse.jdt.annotation.Nullable;
-
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
@@ -31,10 +26,6 @@ import org.eclipse.jdt.annotation.Nullable;
  * @author Joe Wang - Initial contribution
  */
 @NonNullByDefault
-/**
- * Response of {@code GET /temperature/all}: lists the pod plus any pillow with their
- * per-device state. Used for Pod 5 pillow support.
- */
 public class PillowData {
     public @Nullable List<PillowEntry> devices;
 

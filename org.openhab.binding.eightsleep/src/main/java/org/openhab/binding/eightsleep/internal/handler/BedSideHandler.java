@@ -102,6 +102,8 @@ public class BedSideHandler extends BaseThingHandler {
     private boolean syncStartedLogged;
     private final java.util.List<String> syncNotes = new ArrayList<>();
     private volatile String lastSyncSummary = "";
+    /** Set in dispose; in-flight sync callbacks check it before touching the thing. */
+    private volatile boolean disposed;
 
     private void note(String label, @Nullable Object value) {
         syncNotes.add(label + "=" + (value == null ? "<null>" : value));
@@ -145,6 +147,37 @@ public class BedSideHandler extends BaseThingHandler {
     }
 
     @Override
+    public void thingUpdated(Thing thing) {
+        super.thingUpdated(thing);
+        // Re-read the configuration so changes apply without a deactivate/reactivate
+        // cycle: re-register under the (possibly new) user id and restart syncing.
+        BedSideConfiguration config = getConfigAs(BedSideConfiguration.class);
+        if (config.userId.isBlank()) {
+            updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.CONFIGURATION_ERROR,
+                    "@text/bedside.status.missing-user");
+            return;
+        }
+        String newUserId = config.userId.trim();
+        String configuredSide = config.label.isBlank() ? "left" : config.label.trim().toLowerCase();
+        boolean newSoloBed = "solo".equals(configuredSide);
+        this.side = newSoloBed ? "left" : configuredSide;
+        this.soloBed = newSoloBed;
+
+        AccountHandler account = getAccountHandler();
+        if (account == null) {
+            updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.BRIDGE_UNINITIALIZED);
+            return;
+        }
+        if (!newUserId.equals(this.userId)) {
+            account.unregisterBedSide(this.userId);
+            this.userId = newUserId;
+        }
+        account.registerBedSide(this.userId, this.side);
+        startRefreshJob(account);
+        scheduleOneShotSync(account, 0);
+    }
+
+    @Override
     public void bridgeStatusChanged(ThingStatusInfo bridgeStatus) {
         super.bridgeStatusChanged(bridgeStatus);
         if (bridgeStatus.getStatus() == ThingStatus.ONLINE && userId != null && !userId.isBlank()) {
@@ -153,7 +186,7 @@ public class BedSideHandler extends BaseThingHandler {
             if (account != null) {
                 account.registerBedSide(userId, side);
                 startRefreshJob(account);
-                scheduler.schedule(() -> updateChannelsFromCache(account), 2, TimeUnit.SECONDS);
+                scheduleOneShotSync(account, 2);
             }
         }
     }
@@ -172,13 +205,32 @@ public class BedSideHandler extends BaseThingHandler {
         refreshJob = null;
     }
 
+    /** Tracks one-shot syncs so they can be cancelled on dispose like the periodic job. */
+    private final java.util.List<ScheduledFuture<?>> oneShotJobs = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    private void scheduleOneShotSync(AccountHandler account, long delaySeconds) {
+        // Capture the future via an array: the lambda runs later, after schedule() returns.
+        ScheduledFuture<?>[] handle = new ScheduledFuture<?>[1];
+        ScheduledFuture<?> job = scheduler.schedule(() -> {
+            oneShotJobs.remove(handle[0]);
+            updateChannelsFromCache(account);
+        }, delaySeconds, TimeUnit.SECONDS);
+        handle[0] = job;
+        oneShotJobs.add(job);
+    }
+
     @Override
     public void dispose() {
+        disposed = true;
         AccountHandler account = getAccountHandler();
         if (account != null) {
             account.unregisterBedSide(userId);
         }
         stopRefreshJob();
+        for (ScheduledFuture<?> job : oneShotJobs) {
+            job.cancel(false);
+        }
+        oneShotJobs.clear();
         super.dispose();
     }
 
@@ -239,7 +291,7 @@ public class BedSideHandler extends BaseThingHandler {
     private void scheduleRefresh() {
         AccountHandler account = getAccountHandler();
         if (account != null) {
-            scheduler.schedule(() -> updateChannelsFromCache(account), 3, TimeUnit.SECONDS);
+            scheduleOneShotSync(account, 3);
         }
     }
 
@@ -247,6 +299,9 @@ public class BedSideHandler extends BaseThingHandler {
      * Pushes the cached bridge data into the channels of this bed side.
      */
     protected void updateChannelsFromCache(AccountHandler account) {
+        if (disposed) {
+            return;
+        }
         // A single unexpected payload quirk must not kill the periodic sync job:
         // scheduleWithFixedDelay suppresses ALL future executions once a run throws.
         try {

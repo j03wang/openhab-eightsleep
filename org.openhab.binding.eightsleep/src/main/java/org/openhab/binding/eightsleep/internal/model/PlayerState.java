@@ -41,8 +41,12 @@ public class PlayerState {
         return "paused".equalsIgnoreCase(state);
     }
 
-    public int getVolumePercent() {
-        return volume != null ? volume.intValue() : 0;
+    /**
+     * The reported volume in percent; {@code null} when the API did not include a
+     * volume, so callers can distinguish "unknown" from an actual level of zero.
+     */
+    public @Nullable Integer getVolumePercent() {
+        return volume;
     }
 
     public static class Track {

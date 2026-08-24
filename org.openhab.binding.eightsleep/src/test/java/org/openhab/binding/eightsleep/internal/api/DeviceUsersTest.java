@@ -100,8 +100,20 @@ public class DeviceUsersTest {
         var data = EightSleepApiClient.parsePillowData(payload("[" + POD + "," + PILLOW_LEFT + "]"));
         var pillow = data.findPillow("left");
         assertTrue(pillow != null && pillow.isOn());
-        assertEquals(-10, pillow.getLevel());
+        assertEquals(-10, pillow.getLevel().intValue());
         assertNull(data.findPillow("right"));
+    }
+
+    /** A payload without {@code currentLevel} must surface absence, not a level of zero. */
+    @Test
+    public void missingCurrentLevelStaysNull() {
+        var noLevel = """
+                {"device":{"specialization":"pillow","side":"left","deviceId":"pil_n"},"currentState":{"type":"off"}}""";
+        var data = EightSleepApiClient.parsePillowData(payload("[" + noLevel + "]"));
+        var pillow = data.findPillow("left");
+        assertTrue(pillow != null);
+        assertFalse(pillow.isOn());
+        assertNull(pillow.getLevel());
     }
 
     @Test
@@ -110,7 +122,7 @@ public class DeviceUsersTest {
                 {"device":{"specialization":"pillow","side":null,"deviceId":"pil_s"},"currentLevel":3}""";
         var data = EightSleepApiClient.parsePillowData(payload("[" + sideless + "]"));
         var pillow = data.findPillow("right"); // any side falls back to the single pillow
-        assertTrue(pillow != null && pillow.getLevel() == 3);
+        assertTrue(pillow != null && pillow.getLevel() != null && pillow.getLevel() == 3);
     }
 
     @Test

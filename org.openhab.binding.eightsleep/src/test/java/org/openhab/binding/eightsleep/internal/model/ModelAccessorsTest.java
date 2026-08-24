@@ -86,7 +86,7 @@ public class ModelAccessorsTest {
         assertFalse(state.hasSpeaker());
         assertFalse(state.isPlaying());
         assertFalse(state.isPaused());
-        assertEquals(0, state.getVolumePercent());
+        assertNull("missing volume must stay unknown, not read as level zero", state.getVolumePercent());
 
         state.state = "Playing";
         state.volume = 42;
@@ -94,7 +94,7 @@ public class ModelAccessorsTest {
         assertTrue(state.hasSpeaker());
         assertTrue(state.isPlaying());
         assertFalse(state.isPaused());
-        assertEquals(42, state.getVolumePercent());
+        assertEquals(42, state.getVolumePercent().intValue());
     }
 
     // ==================== UserDataCache helpers ====================

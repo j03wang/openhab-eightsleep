@@ -42,6 +42,7 @@ import org.openhab.binding.eightsleep.internal.model.PlayerState;
 import org.openhab.binding.eightsleep.internal.model.TrendParser;
 import org.openhab.core.thing.Bridge;
 import org.openhab.core.thing.ChannelUID;
+import org.openhab.core.thing.Thing;
 import org.openhab.core.thing.ThingStatus;
 import org.openhab.core.thing.ThingStatusDetail;
 import org.openhab.core.thing.binding.BaseBridgeHandler;
@@ -71,7 +72,12 @@ public class AccountHandler extends BaseBridgeHandler {
     private @Nullable AccountPoller poller;
 
     private synchronized AccountPoller getOrCreatePoller(EightSleepApiClient client, String devId) {
-        if (poller == null) {
+        // Rebuild the poller whenever it would reference a different client: after a
+        // reconnect the old client's token context is obsolete and must not be reused.
+        if (poller == null || poller.client() != client || !poller.deviceId().equals(devId)) {
+            if (poller != null) {
+                poller.close();
+            }
             poller = new AccountPoller(client, devId, (k) -> userDataByUser.computeIfAbsent(k, key -> new UserDataCache()),
                     () -> speakerAvailable = true);
         }
@@ -80,6 +86,12 @@ public class AccountHandler extends BaseBridgeHandler {
 
     /** Pending reconnect attempt; cancelled on dispose and before scheduling a new one. */
     private @Nullable ScheduledFuture<?> reconnectJob;
+    /**
+     * Generation counter bumped on every dispose()/reconnect cycle. Poll callbacks
+     * capture it when scheduled and drop their results when it no longer matches,
+     * so in-flight work cannot publish stale state after disposal or a reconnect.
+     */
+    private volatile long lifecycleGeneration;
 
     // cached state, read by bed side handlers
     private volatile @Nullable DeviceData deviceData;
@@ -116,57 +128,58 @@ public class AccountHandler extends BaseBridgeHandler {
 
     /**
      * Connection lifecycle: build clients, authenticate, pick the pod and start
-     * the poll jobs. Runs on the scheduler; retried by {@link #scheduleReconnect}
-     * on any failure.
+     * the poll jobs. Runs on the scheduler but never blocks: authentication and
+     * pod resolution are composed asynchronously; every failure path funnels into
+     * {@link #scheduleReconnect} so the loop restarts until the bridge is disposed.
      */
     private void connect(AccountConfiguration config) {
-        // 1) authentication
         TokenManager localTokenManager = new TokenManager(config.username, config.password,
                 AccountConfigParser.emptyToNull(config.clientId), AccountConfigParser.emptyToNull(config.clientSecret));
         EightSleepApiClient localApiClient = new EightSleepApiClient(localTokenManager);
-        this.tokenManager = localTokenManager;
-        this.apiClient = localApiClient;
 
-        try {
-            localTokenManager.getAccessToken();
-        } catch (ApiException e) {
-            logger.debug("Eight Sleep authentication failed: {}", e.getMessage());
-            updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR, e.getMessage());
-            scheduleReconnect(config);
-            return;
-        }
-        logger.debug("Eight Sleep authenticated");
-
-        // 2) resolve the pod (device id) to bind
-        localApiClient.getHouseholdDevices().thenAccept(devices -> {
-            if (devices.isEmpty()) {
-                // A transient API hiccup can return an empty household - retry like any other
-                // failure instead of latching a terminal CONFIGURATION_ERROR.
-                logger.debug("No Eight Sleep devices found for this account (yet); retrying");
-                updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR,
-                        "@text/account.status.no-devices");
+        localTokenManager.getAccessTokenAsync().whenComplete((token, authFailure) -> {
+            if (authFailure != null) {
+                Throwable cause = authFailure.getCause() != null ? authFailure.getCause() : authFailure;
+                logger.debug("Eight Sleep authentication failed: {}", cause.getMessage());
+                updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR, cause.getMessage());
                 scheduleReconnect(config);
                 return;
             }
-            String devId = chooseDeviceId(devices, config.deviceId, logger);
-            deviceId = devId;
+            logger.debug("Eight Sleep authenticated");
+            this.tokenManager = localTokenManager;
+            this.apiClient = localApiClient;
 
-            Map<String, String> properties = new HashMap<>(thing.getProperties());
-            properties.put(EightSleepBindingConstants.CONFIG_USERNAME, config.username);
-            for (Map.Entry<String, String> entry : devices.entrySet()) {
-                properties.put("device." + entry.getKey(), entry.getValue());
-            }
-            updateProperties(properties);
+            // resolve the pod (device id) to bind, then start polling
+            localApiClient.getHouseholdDevices().thenAccept(devices -> {
+                if (devices.isEmpty()) {
+                    // A transient API hiccup can return an empty household - retry like any other
+                    // failure instead of latching a terminal CONFIGURATION_ERROR.
+                    logger.debug("No Eight Sleep devices found for this account (yet); retrying");
+                    updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR,
+                            "@text/account.status.no-devices");
+                    scheduleReconnect(config);
+                    return;
+                }
+                String devId = chooseDeviceId(devices, config.deviceId, logger);
+                deviceId = devId;
 
-            // 3) start the poll jobs and go online
-            startPolling(config, localApiClient, devId);
-            updateStatus(ThingStatus.ONLINE);
-        }).exceptionally(ex -> {
-            Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
-            logger.debug("Failed to initialize Eight Sleep account: {}", cause.getMessage());
-            updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR, cause.getMessage());
-            scheduleReconnect(config);
-            return null;
+                Map<String, String> properties = new HashMap<>(thing.getProperties());
+                properties.put(EightSleepBindingConstants.CONFIG_USERNAME, config.username);
+                for (Map.Entry<String, String> entry : devices.entrySet()) {
+                    properties.put("device." + entry.getKey(), entry.getValue());
+                }
+                updateProperties(properties);
+
+                // start the poll jobs and go online
+                startPolling(config, localApiClient, devId);
+                updateStatus(ThingStatus.ONLINE);
+            }).exceptionally(ex -> {
+                Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                logger.debug("Failed to initialize Eight Sleep account: {}", cause.getMessage());
+                updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR, cause.getMessage());
+                scheduleReconnect(config);
+                return null;
+            });
         });
     }
 
@@ -192,25 +205,34 @@ public class AccountHandler extends BaseBridgeHandler {
 
     private synchronized void startPolling(AccountConfiguration config, EightSleepApiClient client, String devId) {
         stopPolling();
+        long generation = lifecycleGeneration;
 
         long deviceInterval = AccountConfigParser.clampInterval(config.deviceRefreshInterval, 15, 600);
         long userInterval = AccountConfigParser.clampInterval(config.userRefreshInterval, 15, 600);
         long baseInterval = AccountConfigParser.clampInterval(config.baseRefreshInterval, 30, 900);
 
-        pollJobs.add(scheduler.scheduleWithFixedDelay(() -> pollDeviceData(client, devId), 0, deviceInterval,
-                TimeUnit.SECONDS));
-        AccountPoller poller = getOrCreatePoller(client, devId);
-        pollJobs.add(scheduler.scheduleWithFixedDelay(() -> poller.pollUserData(TREND_LOOKBACK_DAYS), 0,
-                userInterval, TimeUnit.SECONDS));
-        pollJobs.add(
-                scheduler.scheduleWithFixedDelay(() -> pollBaseData(client), baseInterval, baseInterval, TimeUnit.SECONDS));
-        pollJobs.add(scheduler.scheduleWithFixedDelay(() -> poller.pollAwayState(awayModeTracker), 2,
+        pollJobs.add(scheduler.scheduleWithFixedDelay(() -> pollDeviceData(client, devId, generation), 0,
                 deviceInterval, TimeUnit.SECONDS));
+        AccountPoller poller = getOrCreatePoller(client, devId);
+        pollJobs.add(scheduler.scheduleWithFixedDelay(() -> {
+            if (generation == lifecycleGeneration) {
+                poller.pollUserData(TREND_LOOKBACK_DAYS);
+            }
+        }, 0, userInterval, TimeUnit.SECONDS));
+        pollJobs.add(scheduler.scheduleWithFixedDelay(() -> {
+            if (generation == lifecycleGeneration) {
+                pollBaseData(client);
+            }
+        }, baseInterval, baseInterval, TimeUnit.SECONDS));
+        pollJobs.add(scheduler.scheduleWithFixedDelay(() -> {
+            if (generation == lifecycleGeneration) {
+                poller.pollAwayState(awayModeTracker);
+            }
+        }, 2, deviceInterval, TimeUnit.SECONDS));
 
-        // initial immediate polls
-        pollDeviceData(client, devId);
-        poller.pollUserData(TREND_LOOKBACK_DAYS);
-        poller.pollAwayState(awayModeTracker);
+        // The fixed-delay jobs already fire immediately (initial delay 0/2s); no
+        // separate synchronous first run - that used to block the scheduler thread
+        // for up to a full HTTP round trip.
     }
 
     private synchronized void stopPolling() {
@@ -222,9 +244,15 @@ public class AccountHandler extends BaseBridgeHandler {
         pollJobs.clear();
     }
 
-    private void pollDeviceData(EightSleepApiClient client, String devId) {
+    private void pollDeviceData(EightSleepApiClient client, String devId, long generation) {
         try {
             DeviceData data = EightSleepApiClient.join(client.getDeviceData(devId));
+            if (generation != lifecycleGeneration) {
+                // Handler was disposed or reconnected while this poll was in flight:
+                // the result is stale and must not be published.
+                logger.debug("Discarding device poll result from a superseded session");
+                return;
+            }
             deviceData = data;
             hasBase = data.hasBase();
             if (!speakerAvailable && data.hasSpeaker()) {
@@ -232,7 +260,11 @@ public class AccountHandler extends BaseBridgeHandler {
             }
             updateStatus(ThingStatus.ONLINE);
         } catch (ApiException e) {
-            handlePollFailure("device", e);
+            if (generation == lifecycleGeneration) {
+                handlePollFailure("device", e);
+            } else {
+                logger.debug("Ignoring device poll failure from a superseded session: {}", e.getMessage());
+            }
         }
     }
 
@@ -306,9 +338,28 @@ public class AccountHandler extends BaseBridgeHandler {
 
     @Override
     public void dispose() {
+        // Invalidate any poll callback still in flight before cancelling the jobs:
+        // a task already running sees the new generation and drops its result.
+        lifecycleGeneration++;
         cancelReconnect();
         stopPolling();
         super.dispose();
+    }
+
+    @Override
+    public void thingUpdated(Thing thing) {
+        super.thingUpdated(thing);
+        // Apply configuration changes to the active session instead of waiting for
+        // the next reactivation: rebuild clients and restart the poll jobs.
+        AccountConfiguration config = getConfigAs(AccountConfiguration.class);
+        if (config.username.isBlank() || config.password.isBlank()) {
+            lifecycleGeneration++;
+            stopPolling();
+            updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.CONFIGURATION_ERROR,
+                    "@text/account.status.missing-credentials");
+            return;
+        }
+        scheduler.execute(() -> connect(config));
     }
 
     @Override

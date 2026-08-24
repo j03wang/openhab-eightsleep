@@ -55,6 +55,25 @@ public class AccountPoller {
         this.speakerMarker = speakerMarker;
     }
 
+    /** The API client this poller is bound to, for stale-instance detection. */
+    public EightSleepApiClient client() {
+        return client;
+    }
+
+    /** The device id this poller polls, for stale-instance detection. */
+    public String deviceId() {
+        return deviceId;
+    }
+
+    /**
+     * Releases registered users when the poller is replaced by one bound to a
+     * fresher API client; in-flight requests simply write into caches that the
+     * new session re-polls.
+     */
+    public void close() {
+        userids.clear();
+    }
+
     public void register(String userId) {
         userids.add(userId);
     }

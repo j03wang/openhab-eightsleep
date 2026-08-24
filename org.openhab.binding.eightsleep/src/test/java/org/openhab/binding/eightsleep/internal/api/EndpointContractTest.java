@@ -350,7 +350,7 @@ public class EndpointContractTest {
         PillowEntry pillow = data.findPillow("left");
         assertNotNull(pillow);
         assertTrue(pillow.isOn());
-        assertEquals(-15, pillow.getLevel());
+        assertEquals(-15, pillow.getLevel().intValue());
         assertTrue(data.containsPod("dev1"));
     }
 
@@ -428,7 +428,7 @@ public class EndpointContractTest {
         }
         assertTrue(state.isPlaying());
         assertFalse(state.isPaused());
-        assertEquals(30, state.getVolumePercent());
+        assertEquals(30, state.getVolumePercent().intValue());
         assertTrue(state.hasSpeaker());
         assertEquals("Rain", state.currentTrack.name);
     }

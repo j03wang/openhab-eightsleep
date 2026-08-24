@@ -25,6 +25,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 import java.util.concurrent.CompletableFuture;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
@@ -155,7 +156,7 @@ public class EightSleepApiClient {
     public CompletableFuture<List<UserProfileResult>> getUserProfileForDevice(String deviceId) {
         String url = ApiConstants.CLIENT_API_URL + "/devices/" + urlEncode(deviceId)
                 + "?filter=leftUserId,rightUserId,awaySides";
-        return authorizedGet(url).thenApply(body -> {
+        return authorizedGet(url).thenCompose(body -> {
             DeviceUsers users = parseUserIdsForDevice(body);
             List<CompletableFuture<UserProfileResult>> futures = new ArrayList<>();
             java.util.Set<String> ids = new java.util.LinkedHashSet<>();
@@ -173,15 +174,11 @@ public class EightSleepApiClient {
                     return null;
                 }));
             }
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
-            List<UserProfileResult> profiles = new ArrayList<>();
-            for (CompletableFuture<UserProfileResult> future : futures) {
-                UserProfileResult profile = future.join();
-                if (profile != null) {
-                    profiles.add(profile);
-                }
-            }
-            return profiles;
+            // Compose instead of join(): blocking inside a completion stage stalls
+            // the thread that is running dependent stages.
+            return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                    .thenApply(v -> futures.stream().map(CompletableFuture::join).filter(java.util.Objects::nonNull)
+                            .collect(Collectors.toList()));
         });
     }
 
@@ -700,16 +697,11 @@ public class EightSleepApiClient {
     }
 
     /**
-     * Supplies a valid access token, converting checked exceptions into completion exceptions.
+     * Supplies a valid access token without blocking: token acquisition composes
+     * asynchronously so no scheduler or completion thread waits on authentication.
      */
     private CompletableFuture<String> supplyToken() {
-        CompletableFuture<String> future = new CompletableFuture<>();
-        try {
-            future.complete(tokenManager.getAccessToken());
-        } catch (ApiException e) {
-            future.completeExceptionally(e);
-        }
-        return future;
+        return tokenManager.getAccessTokenAsync();
     }
 
 

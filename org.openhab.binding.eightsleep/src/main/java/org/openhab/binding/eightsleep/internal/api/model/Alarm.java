@@ -52,15 +52,6 @@ public class Alarm {
     public @Nullable String nextTimestamp;
 
     /**
-     * Computes when this alarm fires next, WITHOUT relying on {@code nextTimestamp}
-     * (which goes stale or null for disabled alarms).
-     *
-     * Repeating alarms are derived from {@code time} + {@code repeat.weekDays} in
-     * {@code zone}; a repeat flag with no active weekday is treated as daily.
-     * One-shot alarms (repeat disabled) use nextTimestamp, since a bare HH:mm:ss
-     * carries no date.
-     */
-    /**
      * Rolls a stale (already-past) timestamp forward in whole weeks (UTC arithmetic)
      * until it lands after {@code now}. Used for disabled repeating alarms whose
      * server timestamp stopped updating; keeps them ordered correctly without

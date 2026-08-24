@@ -263,11 +263,15 @@ public final class BedSideChannelSync {
         PillowData pillowData = userData.pillowData;
         PillowEntry pillow = pillowData != null ? pillowData.findPillow(side) : null;
         if (pillow != null) {
-            int rawPillowLevel = pillow.getLevel();
-            addQuantity(r, GROUP_PILLOW, CHANNEL_PILLOW_TARGET_TEMPERATURE,
-                    levelToTemp(rawPillowLevel, fahrenheit), fahrenheit);
+            // Only publish the level when the payload actually carried one: a missing
+            // level must not appear as a real "0 %".
+            Integer rawPillowLevel = pillow.getLevel();
+            if (rawPillowLevel != null) {
+                addQuantity(r, GROUP_PILLOW, CHANNEL_PILLOW_TARGET_TEMPERATURE,
+                        levelToTemp(rawPillowLevel, fahrenheit), fahrenheit);
+                add(r, GROUP_PILLOW, CHANNEL_PILLOW_HEATING_LEVEL, new DecimalType(rawPillowLevel));
+            }
             add(r, GROUP_PILLOW, CHANNEL_PILLOW_POWER, OnOffType.from(pillow.isOn()));
-            add(r, GROUP_PILLOW, CHANNEL_PILLOW_HEATING_LEVEL, new DecimalType(rawPillowLevel));
         }
 
         // --- hub LED brightness / water / priming ---

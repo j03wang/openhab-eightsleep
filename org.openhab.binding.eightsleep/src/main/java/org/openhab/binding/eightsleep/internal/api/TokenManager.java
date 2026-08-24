@@ -95,16 +95,42 @@ public class TokenManager {
 
     /**
      * Returns a valid access token, refreshing it first when necessary.
+     * <p>
+     * Blocking convenience for callers already off the scheduler threads; prefer
+     * {@link #getAccessTokenAsync()} on scheduler or completion-thread contexts.
      */
     public synchronized String getAccessToken() throws ApiException {
+        try {
+            return getAccessTokenAsync().get(30, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ApiException("Interrupted while authenticating", e);
+        } catch (ExecutionException | TimeoutException e) {
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            throw new ApiException("Authentication failed: " + cause.getMessage(), e);
+        }
+    }
+
+    /**
+     * Returns a valid access token without blocking the calling thread; a refresh
+     * is triggered first when necessary. Concurrent callers of one refresh share
+     * the same in-flight request.
+     */
+    public synchronized CompletableFuture<String> getAccessTokenAsync() {
         if (accessToken == null || clock.instant().getEpochSecond() + TOKEN_EXPIRY_BUFFER_SECONDS >= expiryEpochSeconds) {
-            refresh();
+            CompletableFuture<String> pending = refreshAsync();
+            inflightRefresh = pending;
+            return pending;
         }
-        String token = accessToken;
-        if (token == null) {
-            throw new ApiException("No access token available");
+        CompletableFuture<String> pending = inflightRefresh;
+        if (pending != null) {
+            // A refresh started by another caller has not stored its token yet
+            String token = accessToken;
+            if (token == null) {
+                return pending;
+            }
         }
-        return token;
+        return CompletableFuture.completedFuture(accessToken);
     }
 
     /**
@@ -123,15 +149,18 @@ public class TokenManager {
         return expiryEpochSeconds - clock.instant().getEpochSecond();
     }
 
-    private void refresh() throws ApiException {
+    private @Nullable CompletableFuture<String> inflightRefresh;
+
+    private synchronized CompletableFuture<String> refreshAsync() {
         CompletableFuture<AuthResponse> future = new CompletableFuture<>();
         authTransport.authenticate(clientId, clientSecret, username, password)
                 .thenAccept(body -> {
                     AuthResponse response = GsonHelper.fromJson(body, AuthResponse.class);
-                    if (response != null) {
+                    if (response != null && response.getAccessToken() != null && response.getExpiresIn() != null) {
                         future.complete(response);
                     } else {
-                        future.completeExceptionally(new ApiException("Empty auth response"));
+                        future.completeExceptionally(
+                                new ApiException(response == null ? "Empty auth response" : "Authentication response missing token fields"));
                     }
                 }).exceptionally(ex -> {
                     Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
@@ -139,24 +168,28 @@ public class TokenManager {
                     return null;
                 });
 
-        AuthResponse response;
-        try {
-            response = future.get(30, TimeUnit.SECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new ApiException("Interrupted while authenticating", e);
-        } catch (ExecutionException | TimeoutException e) {
-            Throwable cause = e.getCause() != null ? e.getCause() : e;
-            throw new ApiException("Authentication failed: " + cause.getMessage(), e);
-        }
+        return future.handle((response, failure) -> {
+            if (failure != null) {
+                Throwable cause = failure.getCause() != null ? failure.getCause() : failure;
+                throw failure instanceof java.util.concurrent.CompletionException ce ? ce
+                        : new java.util.concurrent.CompletionException(
+                                cause instanceof ApiException apiEx ? apiEx : new ApiException(cause.getMessage(), cause));
+            }
+            applyAuthResponse(response);
+            String token = accessToken;
+            if (token == null) {
+                throw new java.util.concurrent.CompletionException(new ApiException("No access token available"));
+            }
+            return token;
+        });
+    }
 
-        this.accessToken = response.getAccessToken();
+    /** Must be called from {@link #refreshAsync}'s completion path only. */
+    private void applyAuthResponse(AuthResponse response) {
         Long expiresIn = response.getExpiresIn();
+        this.accessToken = response.getAccessToken();
         this.userId = response.getUserId();
-        if (accessToken == null || expiresIn == null) {
-            throw new ApiException("Authentication response missing token fields");
-        }
-        this.expiryEpochSeconds = clock.instant().getEpochSecond() + expiresIn.longValue();
+        this.expiryEpochSeconds = clock.instant().getEpochSecond() + (expiresIn != null ? expiresIn.longValue() : 0);
         logger.debug("Obtained new access token for {}, expires in {}s", username, expiresIn);
     }
 

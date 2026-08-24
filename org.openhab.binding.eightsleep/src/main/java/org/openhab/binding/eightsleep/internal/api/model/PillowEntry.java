@@ -12,11 +12,7 @@
  */
 package org.openhab.binding.eightsleep.internal.api.model;
 
-import java.util.HashMap;
 import java.util.Map;
-
-import org.eclipse.jdt.annotation.NonNullByDefault;
-import org.eclipse.jdt.annotation.Nullable;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
@@ -52,8 +48,12 @@ public class PillowEntry {
         return currentState != null && currentState.type != null && !"off".equalsIgnoreCase(currentState.type);
     }
 
-    public int getLevel() {
-        return currentLevel != null ? (int) Math.round(currentLevel.doubleValue()) : 0;
+    /**
+     * The reported heating level rounded to an integer percent; {@code null} when the
+     * payload carried no {@code currentLevel}, so absence is not read as level zero.
+     */
+    public @Nullable Integer getLevel() {
+        return currentLevel != null ? Integer.valueOf((int) Math.round(currentLevel.doubleValue())) : null;
     }
 
     public static class DeviceInfo {
