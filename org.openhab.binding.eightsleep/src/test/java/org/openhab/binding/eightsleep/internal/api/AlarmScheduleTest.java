@@ -12,6 +12,8 @@
  */
 package org.openhab.binding.eightsleep.internal.api;
 
+
+import org.openhab.binding.eightsleep.internal.api.model.Alarm;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -36,18 +38,18 @@ import org.junit.Test;
 @NonNullByDefault
 public class AlarmScheduleTest {
 
-    private EightSleepApiClient.Alarm alarm(String time, boolean enabled, String weekDaysJson) {
-        var alarm = new EightSleepApiClient.Alarm();
+    private Alarm alarm(String time, boolean enabled, String weekDaysJson) {
+        var alarm = new Alarm();
         alarm.id = "a1";
         alarm.time = time;
         alarm.enabled = enabled;
         if (weekDaysJson != null) {
             alarm.repeat = GsonHelper.fromJson(
                     "{\"enabled\":true,\"weekDays\":" + weekDaysJson + "}",
-                    EightSleepApiClient.Alarm.AlarmRepeat.class);
+                    Alarm.AlarmRepeat.class);
         } else {
             alarm.repeat = GsonHelper.fromJson("{\"enabled\":false}",
-                    EightSleepApiClient.Alarm.AlarmRepeat.class);
+                    Alarm.AlarmRepeat.class);
         }
         return alarm;
     }

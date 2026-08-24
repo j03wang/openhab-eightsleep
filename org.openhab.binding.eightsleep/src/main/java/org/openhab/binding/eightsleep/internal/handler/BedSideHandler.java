@@ -12,6 +12,8 @@
  */
 package org.openhab.binding.eightsleep.internal.handler;
 
+
+import org.openhab.binding.eightsleep.internal.api.model.Alarm;
 import static org.openhab.binding.eightsleep.internal.EightSleepBindingConstants.*;
 
 import java.time.Duration;
@@ -341,7 +343,7 @@ public class BedSideHandler extends BaseThingHandler {
         if (userData == null) {
             return null;
         }
-        EightSleepApiClient.Alarm nextAlarm = AlarmSelector.findTargetAlarm(userData, Instant.now(),
+        Alarm nextAlarm = AlarmSelector.findTargetAlarm(userData, Instant.now(),
                 java.time.ZoneId.systemDefault());
         return nextAlarm != null && nextAlarm.id != null ? commandedAlarms.get(nextAlarm.id) : null;
     }

@@ -12,6 +12,8 @@
  */
 package org.openhab.binding.eightsleep.internal.api;
 
+
+import org.openhab.binding.eightsleep.internal.api.model.Alarm;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -298,7 +300,7 @@ public class ControlOperationsTest {
     public void alarmUpdatesWithoutIdFailFast() throws Exception {
         ScriptedTransport t = new ScriptedTransport();
         EightSleepApiClient c = client(t);
-        EightSleepApiClient.Alarm idless = new EightSleepApiClient.Alarm();
+        Alarm idless = new Alarm();
 
         try {
             join(c.setAlarmEnabled("u1", idless, true));
@@ -374,7 +376,7 @@ public class ControlOperationsTest {
     /** Alarm enable/time updates PUT the exact alarm-scoped URL with the built body. */
     @Test
     public void alarmToggleAndRescheduleTargetAlarmScopedUrl() throws Exception {
-        EightSleepApiClient.Alarm alarm = EightSleepApiClient.parseAlarms("""
+        Alarm alarm = EightSleepApiClient.parseAlarms("""
                 {"alarms":[{"id":"a1","enabled":true,"time":"07:00:00",
                  "repeat":{"enabled":true,"weekDays":{"monday":true}}}]}""").get(0);
 

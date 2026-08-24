@@ -78,21 +78,6 @@ public class AccountHandler extends BaseBridgeHandler {
         return poller;
     }
 
-    private AccountPoller.AwayModeTrackerHolder awayTrackerView() {
-        return new AccountPoller.AwayModeTrackerHolder() {
-            @Override
-            public java.time.@Nullable Instant commandedAtOf(String uid) {
-                return awayModeTracker.commandedAtOf(uid);
-            }
-
-            @Override
-            public void markPolled() {
-                awayPolledOnceFlag = true;
-            }
-        };
-    }
-
-    private volatile boolean awayPolledOnceFlag;
     /** Pending reconnect attempt; cancelled on dispose and before scheduling a new one. */
     private @Nullable ScheduledFuture<?> reconnectJob;
 
@@ -145,7 +130,7 @@ public class AccountHandler extends BaseBridgeHandler {
         try {
             localTokenManager.getAccessToken();
         } catch (ApiException e) {
-            logger.warn("Eight Sleep authentication failed: {}", e.getMessage());
+            logger.debug("Eight Sleep authentication failed: {}", e.getMessage());
             updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR, e.getMessage());
             scheduleReconnect(config);
             return;
@@ -178,7 +163,7 @@ public class AccountHandler extends BaseBridgeHandler {
             updateStatus(ThingStatus.ONLINE);
         }).exceptionally(ex -> {
             Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
-            logger.warn("Failed to initialize Eight Sleep account: {}", cause.getMessage());
+            logger.debug("Failed to initialize Eight Sleep account: {}", cause.getMessage());
             updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR, cause.getMessage());
             scheduleReconnect(config);
             return null;
@@ -219,13 +204,13 @@ public class AccountHandler extends BaseBridgeHandler {
                 userInterval, TimeUnit.SECONDS));
         pollJobs.add(
                 scheduler.scheduleWithFixedDelay(() -> pollBaseData(client), baseInterval, baseInterval, TimeUnit.SECONDS));
-        pollJobs.add(scheduler.scheduleWithFixedDelay(() -> poller.pollAwayState(awayTrackerView()), 2,
+        pollJobs.add(scheduler.scheduleWithFixedDelay(() -> poller.pollAwayState(awayModeTracker), 2,
                 deviceInterval, TimeUnit.SECONDS));
 
         // initial immediate polls
         pollDeviceData(client, devId);
         poller.pollUserData(TREND_LOOKBACK_DAYS);
-        poller.pollAwayState(awayTrackerView());
+        poller.pollAwayState(awayModeTracker);
     }
 
     private synchronized void stopPolling() {
@@ -272,7 +257,7 @@ public class AccountHandler extends BaseBridgeHandler {
 
     /** True once an away state is known (commanded or polled). */
     public boolean isAwayPolledOnce() {
-        return awayModeTracker.isKnown() || awayPolledOnceFlag;
+        return awayModeTracker.isKnown();
     }
 
     private final AwayModeTracker awayModeTracker = new AwayModeTracker();

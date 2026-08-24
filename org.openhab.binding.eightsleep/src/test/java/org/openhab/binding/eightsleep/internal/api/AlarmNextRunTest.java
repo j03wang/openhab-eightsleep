@@ -12,6 +12,8 @@
  */
 package org.openhab.binding.eightsleep.internal.api;
 
+
+import org.openhab.binding.eightsleep.internal.api.model.Alarm;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -34,11 +36,11 @@ import org.junit.Test;
 @NonNullByDefault
 public class AlarmNextRunTest {
 
-    private static EightSleepApiClient.Alarm alarmWithRepeat(String repeatJson) {
-        var alarm = new EightSleepApiClient.Alarm();
+    private static Alarm alarmWithRepeat(String repeatJson) {
+        var alarm = new Alarm();
         alarm.id = "a1";
         alarm.time = "07:30:00";
-        alarm.repeat = GsonHelper.fromJson(repeatJson, EightSleepApiClient.Alarm.AlarmRepeat.class);
+        alarm.repeat = GsonHelper.fromJson(repeatJson, Alarm.AlarmRepeat.class);
         return alarm;
     }
 
@@ -46,14 +48,14 @@ public class AlarmNextRunTest {
 
     @Test
     public void nullTimestampStaysNull() {
-        assertNull(EightSleepApiClient.rollToNextWeek(null, Instant.now()));
+        assertNull(Alarm.rollToNextWeek(null, Instant.now()));
     }
 
     @Test
     public void futureTimestampUnchanged() {
         Instant now = Instant.parse("2026-08-22T12:00:00Z");
         Instant future = Instant.parse("2026-08-25T09:00:00Z");
-        assertEquals(future, EightSleepApiClient.rollToNextWeek(future, now));
+        assertEquals(future, Alarm.rollToNextWeek(future, now));
     }
 
     /** A stale timestamp rolls forward in whole weeks until it lands after now. */
@@ -61,7 +63,7 @@ public class AlarmNextRunTest {
     public void pastTimestampRollsWholeWeeks() {
         Instant now = Instant.parse("2026-08-22T12:00:00Z");
         Instant stale = Instant.parse("2026-08-01T09:00:00Z"); // 3 weeks back
-        Instant rolled = EightSleepApiClient.rollToNextWeek(stale, now);
+        Instant rolled = Alarm.rollToNextWeek(stale, now);
         assertNotNull(rolled);
         assertEquals(Instant.parse("2026-08-29T09:00:00Z"), rolled);
         assertFalse(rolled.isBefore(now));
@@ -76,7 +78,7 @@ public class AlarmNextRunTest {
         ZoneId la = ZoneId.of("America/Los_Angeles");
         Instant beforeDst = ZonedDateTime.of(2026, 10, 25, 7, 0, 0, 0, la).toInstant(); // PDT (UTC-7)
         Instant now = beforeDst.plusSeconds(60);
-        Instant rolled = EightSleepApiClient.rollToNextWeek(beforeDst, now); // crosses Nov 1 DST end
+        Instant rolled = Alarm.rollToNextWeek(beforeDst, now); // crosses Nov 1 DST end
         assertNotNull(rolled);
         assertEquals("same UTC time-of-day preserved", beforeDst.toEpochMilli() + 7L * 24 * 3600 * 1000,
                 rolled.toEpochMilli());
@@ -102,7 +104,7 @@ public class AlarmNextRunTest {
     /** Time strings carrying fractional seconds still parse (first 8 chars used). */
     @Test
     public void fractionalSecondTimeParses() {
-        var alarm = new EightSleepApiClient.Alarm();
+        var alarm = new Alarm();
         alarm.time = "06:45:00.000";
         alarm.nextTimestamp = "2026-08-30T16:00:00Z"; // one-shot path uses server ts anyway
         Instant run = alarm.computeNextRun(ZoneId.of("UTC"), NOW);
@@ -113,7 +115,7 @@ public class AlarmNextRunTest {
     @Test
     public void oneShotFutureServerTimestampWins() {
         var alarm = GsonHelper.fromJson(
-                "{\"repeat\":{\"enabled\":false}}", EightSleepApiClient.Alarm.class);
+                "{\"repeat\":{\"enabled\":false}}", Alarm.class);
         alarm.time = "09:00:00";
         alarm.nextTimestamp = "2026-09-05T09:00:00Z";
         assertEquals(Instant.parse("2026-09-05T09:00:00Z"), alarm.computeNextRun(ZoneId.of("UTC"), NOW));
@@ -122,7 +124,7 @@ public class AlarmNextRunTest {
     /** One-shot DISABLED alarm with a STALE timestamp is kept in the ordering one week out. */
     @Test
     public void oneShotStaleTimestampRollsAWeek() {
-        var alarm = new EightSleepApiClient.Alarm();
+        var alarm = new Alarm();
         alarm.time = "09:00:00";
         alarm.nextTimestamp = "2026-08-20T09:00:00Z"; // already fired, disabled since
         Instant run = alarm.computeNextRun(ZoneId.of("UTC"), NOW);
@@ -132,7 +134,7 @@ public class AlarmNextRunTest {
     /** One-shot with no timestamp at all yields null (excluded from selection). */
     @Test
     public void oneShotWithoutTimestampIsNull() {
-        var alarm = new EightSleepApiClient.Alarm();
+        var alarm = new Alarm();
         alarm.time = "09:00:00";
         assertNull(alarm.computeNextRun(ZoneId.of("UTC"), NOW));
     }
@@ -157,7 +159,7 @@ public class AlarmNextRunTest {
         assertEquals(3, zdt.getHour()); // shifted out of the gap by the zone rules
     }
 
-    private static EightSleepApiClient.Alarm alarmWithRetryAt(String time, String repeatJson) {
+    private static Alarm alarmWithRetryAt(String time, String repeatJson) {
         var alarm = alarmWithRepeat(repeatJson);
         alarm.time = time;
         return alarm;

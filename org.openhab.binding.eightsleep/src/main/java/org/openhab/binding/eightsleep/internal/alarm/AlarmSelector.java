@@ -12,7 +12,10 @@
  */
 package org.openhab.binding.eightsleep.internal.alarm;
 
+
+import org.openhab.binding.eightsleep.internal.api.model.Alarm;
 import java.time.Instant;
+import java.util.List;
 import java.time.ZoneId;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
@@ -40,7 +43,7 @@ public final class AlarmSelector {
     /**
      * Selects the target alarm using the system zone (production path).
      */
-    public static EightSleepApiClient.@Nullable Alarm findTargetAlarm(UserDataCache userData,
+    public static @Nullable Alarm findTargetAlarm(UserDataCache userData,
             Instant now) {
         return findTargetAlarm(userData, now, ZoneId.systemDefault());
     }
@@ -49,11 +52,11 @@ public final class AlarmSelector {
      * As above with an explicit zone - production uses the system zone, tests inject
      * a fixed zone so they cannot depend on where they run.
      */
-    public static EightSleepApiClient.@Nullable Alarm findTargetAlarm(UserDataCache userData,
+    public static @Nullable Alarm findTargetAlarm(UserDataCache userData,
             Instant now, ZoneId zone) {
-        EightSleepApiClient.Alarm target = null;
+        Alarm target = null;
         Instant targetRun = null;
-        for (EightSleepApiClient.Alarm alarm : userData.alarms) {
+        for (Alarm alarm : userData.alarms) {
             Instant run = alarm.computeNextRun(zone, now);
             if (run == null) {
                 continue;

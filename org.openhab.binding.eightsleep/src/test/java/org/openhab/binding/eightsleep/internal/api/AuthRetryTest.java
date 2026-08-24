@@ -34,27 +34,6 @@ import org.junit.Test;
 @NonNullByDefault
 public class AuthRetryTest {
 
-    /** Recorded request + scripted response for one transport call. */
-    private static class ScriptedTransport implements EightSleepApiClient.Transport {
-        final List<String> requests = new CopyOnWriteArrayList<>();
-        final List<CompletableFuture<String>> script = new CopyOnWriteArrayList<>();
-
-        void enqueueFailure(ApiException e) {
-            CompletableFuture<String> f = new CompletableFuture<>();
-            f.completeExceptionally(e);
-            script.add(f);
-        }
-
-        void enqueueSuccess(String body) {
-            script.add(CompletableFuture.completedFuture(body));
-        }
-
-        @Override
-        public CompletableFuture<String> send(String method, String url, String jsonBody, String accessToken) {
-            requests.add(method + " " + url + " token=" + accessToken);
-            return script.remove(0);
-        }
-    }
 
     private static TokenManager managerWithToken() {
         return new TokenManager("me@x.com", "pw", null, null,

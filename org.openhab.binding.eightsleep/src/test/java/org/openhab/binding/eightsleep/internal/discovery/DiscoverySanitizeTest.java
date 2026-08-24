@@ -12,6 +12,9 @@
  */
 package org.openhab.binding.eightsleep.internal.discovery;
 
+
+import org.openhab.binding.eightsleep.internal.api.model.UserCurrentDevice;
+import org.openhab.binding.eightsleep.internal.api.model.UserProfileResult;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
@@ -75,11 +78,11 @@ public class DiscoverySanitizeTest {
                 BRIDGE, "Pod", profile(null, "left")));
     }
 
-    private static EightSleepApiClient.UserProfileResult profile(String userId, String side) {
-        var device = new EightSleepApiClient.UserCurrentDevice();
+    private static UserProfileResult profile(String userId, String side) {
+        var device = new UserCurrentDevice();
         device.side = side;
         device.deviceId = "dev1";
-        return new EightSleepApiClient.UserProfileResult(userId, device);
+        return new UserProfileResult(userId, device);
     }
 
     @Test

@@ -12,6 +12,10 @@
  */
 package org.openhab.binding.eightsleep.internal.handler;
 
+
+import org.openhab.binding.eightsleep.internal.api.model.Alarm;
+import org.openhab.binding.eightsleep.internal.api.model.PillowData;
+import org.openhab.binding.eightsleep.internal.api.model.PillowEntry;
 import static org.openhab.binding.eightsleep.internal.EightSleepBindingConstants.DEFAULT_SNOOZE_MINUTES;
 
 import java.time.Instant;
@@ -103,6 +107,31 @@ public final class BedSideCommands {
         return head ? new int[] { currentLeg, clamped } : new int[] { clamped, currentTorso };
     }
 
+    /**
+     * Resolves the alarm the alarm channels target and runs {@code action} with it;
+     * logs and returns silently when no actionable alarm exists.
+     */
+    private static void withTargetAlarm(Context ctx, String action, java.util.function.Consumer<Alarm> consumer) {
+        UserDataCache userData = ctx.account().getUserData(ctx.userId());
+        Alarm alarm = userData != null ? AlarmSelector.findTargetAlarm(userData, Instant.now()) : null;
+        if (alarm == null || alarm.id == null) {
+            LOGGER.debug("No upcoming alarm to {}", action);
+            return;
+        }
+        consumer.accept(alarm);
+    }
+
+    /** Completes a command: refresh on success, log on expected failures. */
+    private static void apply(Context ctx, java.util.concurrent.CompletionStage<?> stage) {
+        stage.thenRun(ctx.onApplied()).exceptionally(BedSideCommands::logFailure);
+    }
+
+    private static Void logFailure(Throwable ex) {
+        Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+        LOGGER.warn("Eight Sleep command failed: {}", cause.getMessage());
+        return null;
+    }
+
     // ==================== individual commands ====================
 
     public static void targetTemperature(Context ctx, org.openhab.core.types.Command command) throws ApiException {
@@ -115,8 +144,7 @@ public final class BedSideCommands {
             fahrenheit = quantity.getUnit().isCompatible(ImperialUnits.FAHRENHEIT);
         }
         int level = HeatingLevelConversion.temperatureToLevel(temperature, fahrenheit);
-        ctx.client().setHeatingLevel(ctx.userId(), level, 0).thenRun(ctx.onApplied())
-                .exceptionally(BedSideCommands::logFailure);
+        apply(ctx, ctx.client().setHeatingLevel(ctx.userId(), level, 0));
     }
 
     public static void sidePower(Context ctx, org.openhab.core.types.Command command) throws ApiException {
@@ -124,8 +152,7 @@ public final class BedSideCommands {
         // Optimistic feedback + timestamped command: the sync loop does last-write-wins
         // against the polled payload, so no stale cycle can flip the switch back.
         ctx.commanded().put("sidePower", new CommandedValue(Instant.now(), turnOn));
-        var future = turnOn ? ctx.client().turnOnSide(ctx.userId()) : ctx.client().turnOffSide(ctx.userId());
-        future.thenRun(ctx.onApplied()).exceptionally(BedSideCommands::logFailure);
+        apply(ctx, turnOn ? ctx.client().turnOnSide(ctx.userId()) : ctx.client().turnOffSide(ctx.userId()));
     }
 
     public static void baseAngle(Context ctx, org.openhab.core.types.Command command, boolean head)
@@ -157,8 +184,7 @@ public final class BedSideCommands {
             LOGGER.debug("No device id; cannot set base angle");
             return;
         }
-        ctx.client().setBaseAngle(ctx.userId(), devId, angles[0], angles[1]).thenRun(ctx.onApplied())
-                .exceptionally(BedSideCommands::logFailure);
+        apply(ctx, ctx.client().setBaseAngle(ctx.userId(), devId, angles[0], angles[1]));
     }
 
     public static void basePreset(Context ctx, org.openhab.core.types.Command command) {
@@ -167,15 +193,14 @@ public final class BedSideCommands {
             LOGGER.debug("No device id; cannot set base preset");
             return;
         }
-        ctx.client().setBasePreset(ctx.userId(), devId, command.toString().toLowerCase())
-                .thenRun(ctx.onApplied()).exceptionally(BedSideCommands::logFailure);
+        apply(ctx, ctx.client().setBasePreset(ctx.userId(), devId, command.toString().toLowerCase()));
     }
 
     public static void pillowPower(Context ctx, org.openhab.core.types.Command command) {
         var future = command == OnOffType.ON ? ctx.client().turnOnPillow(ctx.userId())
                 : command == OnOffType.OFF ? ctx.client().turnOffPillow(ctx.userId()) : null;
         if (future != null) {
-            future.thenRun(ctx.onApplied()).exceptionally(BedSideCommands::logFailure);
+            apply(ctx, future);
         }
     }
 
@@ -187,29 +212,23 @@ public final class BedSideCommands {
         int level = HeatingLevelConversion.temperatureToLevel(temperature, ctx.fahrenheit());
 
         UserDataCache data = ctx.account().getUserData(ctx.userId());
-        EightSleepApiClient.PillowData pillowData = data != null ? data.pillowData : null;
-        EightSleepApiClient.PillowEntry pillow = pillowData != null ? pillowData.findPillow(ctx.side()) : null;
+        PillowData pillowData = data != null ? data.pillowData : null;
+        PillowEntry pillow = pillowData != null ? pillowData.findPillow(ctx.side()) : null;
         // Writing a level to an off pillow is silently ignored by the API: power on first
         var future = pillow != null && !pillow.isOn()
                 ? ctx.client().turnOnPillow(ctx.userId()).thenCompose(v -> ctx.client().setPillowLevel(ctx.userId(),
                         level))
                 : ctx.client().setPillowLevel(ctx.userId(), level);
-        future.thenRun(ctx.onApplied()).exceptionally(BedSideCommands::logFailure);
+        apply(ctx, future);
     }
 
     public static void alarmEnabled(Context ctx, org.openhab.core.types.Command command) {
-        UserDataCache userData = ctx.account().getUserData(ctx.userId());
-        EightSleepApiClient.Alarm alarm = userData != null
-                ? AlarmSelector.findTargetAlarm(userData, Instant.now()) : null;
-        if (alarm == null || alarm.id == null) {
-            LOGGER.debug("No upcoming alarm to toggle");
-            return;
-        }
-        boolean enable = command == OnOffType.ON;
-        // Optimistic feedback + timestamped command (last-write-wins vs the polled list).
-        ctx.commandedAlarms().put(alarm.id, new CommandedValue(Instant.now(), enable));
-        ctx.client().setAlarmEnabled(ctx.userId(), alarm, enable).thenRun(ctx.onApplied())
-                .exceptionally(BedSideCommands::logFailure);
+        withTargetAlarm(ctx, "toggle", alarm -> {
+            boolean enable = command == OnOffType.ON;
+            // Optimistic feedback + timestamped command (LWW vs the polled list).
+            ctx.commandedAlarms().put(alarm.id, new CommandedValue(Instant.now(), enable));
+            apply(ctx, ctx.client().setAlarmEnabled(ctx.userId(), alarm, enable));
+        });
     }
 
     public static void alarmTime(Context ctx, org.openhab.core.types.Command command) {
@@ -229,41 +248,21 @@ public final class BedSideCommands {
             return;
         }
 
-        UserDataCache userData = ctx.account().getUserData(ctx.userId());
-        EightSleepApiClient.Alarm alarm = userData != null
-                ? AlarmSelector.findTargetAlarm(userData, Instant.now()) : null;
-        if (alarm == null || alarm.id == null) {
-            LOGGER.debug("No upcoming alarm to reschedule");
-            return;
-        }
-        String timeOfDay = LocalDateTime.ofInstant(newTime, ZoneId.systemDefault())
-                .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
-        ctx.client().setAlarmTime(ctx.userId(), alarm, timeOfDay).thenRun(ctx.onApplied())
-                .exceptionally(BedSideCommands::logFailure);
+        withTargetAlarm(ctx, "reschedule", alarm -> {
+            String timeOfDay = LocalDateTime.ofInstant(newTime, ZoneId.systemDefault())
+                    .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
+            apply(ctx, ctx.client().setAlarmTime(ctx.userId(), alarm, timeOfDay));
+        });
     }
 
     public static void dismissAlarm(Context ctx) {
-        UserDataCache userData = ctx.account().getUserData(ctx.userId());
-        EightSleepApiClient.Alarm alarm = userData != null
-                ? AlarmSelector.findTargetAlarm(userData, Instant.now()) : null;
-        if (alarm == null || alarm.id == null) {
-            LOGGER.debug("No upcoming alarm to dismiss");
-            return;
-        }
-        ctx.client().dismissAlarm(ctx.userId(), alarm.id).thenRun(ctx.onApplied())
-                .exceptionally(BedSideCommands::logFailure);
+        withTargetAlarm(ctx, "dismiss", alarm -> apply(ctx,
+                ctx.client().dismissAlarm(ctx.userId(), alarm.id)));
     }
 
     public static void snoozeAlarm(Context ctx) {
-        UserDataCache userData = ctx.account().getUserData(ctx.userId());
-        EightSleepApiClient.Alarm alarm = userData != null
-                ? AlarmSelector.findTargetAlarm(userData, Instant.now()) : null;
-        if (alarm == null || alarm.id == null) {
-            LOGGER.debug("No upcoming alarm to snooze");
-            return;
-        }
-        ctx.client().snoozeAlarm(ctx.userId(), alarm.id, DEFAULT_SNOOZE_MINUTES).thenRun(ctx.onApplied())
-                .exceptionally(BedSideCommands::logFailure);
+        withTargetAlarm(ctx, "snooze", alarm -> apply(ctx,
+                ctx.client().snoozeAlarm(ctx.userId(), alarm.id, DEFAULT_SNOOZE_MINUTES)));
     }
 
     public static void awayMode(Context ctx, org.openhab.core.types.Command command) {
@@ -277,15 +276,14 @@ public final class BedSideCommands {
         ctx.account().setLastKnownAwayMode(ctx.userId(), start);
         // side is the configured physical side; the client skips re-assertion when it
         // is not a genuine left/right (solo beds must not be rewritten).
-        ctx.client().setAwayMode(ctx.userId(), devId, ctx.soloBed() ? "solo" : ctx.side(),
-                start ? "start" : "end").thenRun(ctx.onApplied()).exceptionally(BedSideCommands::logFailure);
+        apply(ctx, ctx.client().setAwayMode(ctx.userId(), devId, ctx.soloBed() ? "solo" : ctx.side(),
+                start ? "start" : "end"));
     }
 
     public static void primePod(Context ctx) {
         String devId = ctx.account().getDeviceId();
         if (devId != null) {
-            ctx.client().primePod(devId, ctx.userId()).thenRun(ctx.onApplied())
-                    .exceptionally(BedSideCommands::logFailure);
+            apply(ctx, ctx.client().primePod(devId, ctx.userId()));
         } else {
             LOGGER.warn("No device id known; cannot start priming");
         }
@@ -297,16 +295,9 @@ public final class BedSideCommands {
                 : command instanceof QuantityType<?> quantity ? (int) Math.round(quantity.doubleValue())
                 : -1;
         if (devId != null && level >= 0) {
-            ctx.client().setLedBrightness(devId, level).thenRun(ctx.onApplied())
-                    .exceptionally(BedSideCommands::logFailure);
+            apply(ctx, ctx.client().setLedBrightness(devId, level));
         } else {
             LOGGER.warn("Cannot apply LED brightness from command {}", command);
         }
-    }
-
-    private static Void logFailure(Throwable ex) {
-        Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
-        LOGGER.warn("Eight Sleep command failed: {}", cause.getMessage());
-        return null;
     }
 }

@@ -12,6 +12,8 @@
  */
 package org.openhab.binding.eightsleep.internal.discovery;
 
+
+import org.openhab.binding.eightsleep.internal.api.model.UserProfileResult;
 import static org.openhab.binding.eightsleep.internal.EightSleepBindingConstants.*;
 
 import java.util.HashMap;
@@ -87,31 +89,40 @@ public class BedSideDiscoveryService extends AbstractDiscoveryService implements
         }
 
 
-        client.getHouseholdDevices().thenAccept(devices -> {
-            String deviceLabel = devices.getOrDefault(deviceId, deviceId);
-            client.getUserProfileForDevice(deviceId).thenAccept(profiles -> {
-                LOGGER.debug("Eight Sleep discovery: found {} user(s) for device {}", profiles.size(), deviceId);
-                for (EightSleepApiClient.UserProfileResult profile : profiles) {
-                    DiscoveryResult result = buildDiscoveryResult(account.getThing().getUID(), deviceLabel, profile);
-                    if (result != null) {
-                        thingDiscovered(result);
-                    }
-                }
-            }).exceptionally(ex -> {
-                Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
-                LOGGER.warn("User profile discovery failed: {}", cause.getMessage());
+        // label lookup and profile fan-out are composed, not nested: each stage
+        // logs its own failure and the scan simply ends when either fails.
+        client.getHouseholdDevices()
+            .thenApply(devices -> devices.getOrDefault(deviceId, deviceId))
+            .thenCompose(deviceLabel -> client.getUserProfileForDevice(deviceId)
+                .thenApply(profiles -> Map.entry(deviceLabel, profiles)))
+            .thenAccept(labelAndProfiles ->
+                publishResults(account, labelAndProfiles.getKey(), labelAndProfiles.getValue()))
+            .exceptionally(ex -> {
+                LOGGER.debug("Device discovery failed: {}", message(ex));
                 return null;
             });
-        }).exceptionally(ex -> {
-            Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
-            LOGGER.warn("Device discovery failed: {}", cause.getMessage());
-            return null;
-        });
+    }
+
+    private static String message(Throwable ex) {
+        Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+        return cause.getMessage() != null ? cause.getMessage() : String.valueOf(cause);
+    }
+
+    /** Publishes one discovery result per discovered user profile. */
+    private void publishResults(AccountHandler account, String deviceLabel,
+            java.util.List<UserProfileResult> profiles) {
+        LOGGER.debug("Eight Sleep discovery: found {} user(s) for device {}", profiles.size(), account.getDeviceId());
+        for (UserProfileResult profile : profiles) {
+            DiscoveryResult result = buildDiscoveryResult(account.getThing().getUID(), deviceLabel, profile);
+            if (result != null) {
+                thingDiscovered(result);
+            }
+        }
     }
 
     /** Visible for tests. */
     static org.openhab.core.config.discovery.DiscoveryResult buildDiscoveryResult(ThingUID bridgeUID,
-            String deviceLabel, EightSleepApiClient.UserProfileResult profile) {
+            String deviceLabel, UserProfileResult profile) {
         String userId = profile.userId();
         if (userId == null) {
             return null;

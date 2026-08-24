@@ -12,6 +12,11 @@
  */
 package org.openhab.binding.eightsleep.internal.api;
 
+import org.openhab.binding.eightsleep.internal.api.model.Alarm;
+import org.openhab.binding.eightsleep.internal.api.model.PillowData;
+import org.openhab.binding.eightsleep.internal.api.model.DeviceUsers;
+import org.openhab.binding.eightsleep.internal.api.model.UserCurrentDevice;
+import org.openhab.binding.eightsleep.internal.api.model.UserProfileResult;
 import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
@@ -256,32 +261,6 @@ public class EightSleepApiClient {
         });
     }
 
-    /** Public view of the device-user assignment incl. away sides. */
-    public static class DeviceUsers {
-        public @Nullable String leftUserId;
-        public @Nullable String rightUserId;
-        /**
-         * Side -> userId map from the {@code awaySides} filter. NOTE: in live captures
-         * the KEYS are "leftUserId"/"rightUserId" (not "left"/"right") - only the
-         * VALUES (user ids) are meaningful, which is all {@link #isAway} uses.
-         */
-        public Map<String, String> awaySides = new HashMap<>();
-
-        /**
-         * Verified live semantics (captured present vs away):
-         * an away user is listed in {@code awaySides} AND has been removed from their
-         * side slot (leftUserId/rightUserId becomes null while away). A present user
-         * is listed in awaySides too (stale record) but still occupies a side slot.
-         */
-        public boolean isAway(String userId) {
-            if (userId == null || !awaySides.containsValue(userId)) {
-                return false;
-            }
-            boolean occupiesSide = userId.equals(leftUserId) || userId.equals(rightUserId);
-            return !occupiesSide;
-        }
-    }
-
     /**
      * Fetches sleep trends for the given interval (v2 API). The result contains the
      * session days; index 0 from the end is the current/most recent session.
@@ -294,24 +273,6 @@ public class EightSleepApiClient {
                 + "&to=" + end.format(DateTimeFormatter.ISO_LOCAL_DATE)
                 + "&include-main=false&include-all-sessions=true&model-version=v2";
         return authorizedGet(url).thenApply(EightSleepApiClient::parseTrendDays);
-    }
-
-    /**
-     * Rolls a stale (already-past) timestamp forward in whole weeks (UTC arithmetic)
-     * until it lands after {@code now}. Used for disabled repeating alarms whose
-     * server timestamp stopped updating; keeps them ordered correctly without
-     * inventing state. Returns null when there is no base timestamp to roll from.
-     */
-    public static java.time.@Nullable Instant rollToNextWeek(java.time.@Nullable Instant ts,
-            java.time.Instant now) {
-        if (ts == null) {
-            return null;
-        }
-        java.time.Instant rolled = ts;
-        while (rolled.isBefore(now)) {
-            rolled = rolled.plus(java.time.Duration.ofDays(7));
-        }
-        return rolled;
     }
 
     /** Static for contract tests: extracts the raw "days" array from a trends body. */
@@ -816,15 +777,6 @@ public class EightSleepApiClient {
 
     // ==================== response DTOs ====================
 
-    /** Result of fetching a user profile: the user id plus its current device assignment. */
-    public record UserProfileResult(String userId, @Nullable UserCurrentDevice currentDevice) {
-    }
-
-    public static class UserCurrentDevice {
-        public @Nullable String side;
-        public @Nullable String deviceId;
-    }
-
     private static class UserProfileEnvelope {
         public @Nullable UserProfile user;
 
@@ -874,181 +826,5 @@ public class EightSleepApiClient {
         public @Nullable List<Alarm> alarms;
     }
 
-    /** An alarm entry from the alarms API. */
-    public static class Alarm {
-        public @Nullable String id;
-        public @Nullable String time;
-        public @Nullable Boolean enabled;
-        public @Nullable AlarmRepeat repeat;
-        public @Nullable Map<String, Object> thermal;
-        public @Nullable Map<String, Object> vibration;
-        public @Nullable Map<String, Object> audio;
-        public @Nullable Map<String, Object> smart;
-        public @Nullable List<String> tags;
-        public @Nullable Boolean skipNext;
-        public @Nullable Boolean snoozing;
-        public @Nullable String nextTimestamp;
 
-        /**
-         * Computes when this alarm fires next, WITHOUT relying on {@code nextTimestamp}
-         * (which goes stale or null for disabled alarms).
-         *
-         * Repeating alarms are derived from {@code time} + {@code repeat.weekDays} in
-         * {@code zone}; a repeat flag with no active weekday is treated as daily.
-         * One-shot alarms (repeat disabled) use nextTimestamp, since a bare HH:mm:ss
-         * carries no date.
-         */
-        public java.time.@Nullable Instant computeNextRun(java.time.ZoneId zone) {
-            return computeNextRun(zone, java.time.Instant.now());
-        }
-
-        /** As above with an injectable clock (testability at any point in the week). */
-        public java.time.@Nullable Instant computeNextRun(java.time.ZoneId zone,
-                java.time.Instant now) {
-            if (time == null || time.isBlank()) {
-                return null;
-            }
-            java.time.LocalTime fireTime = org.openhab.binding.eightsleep.internal.model.TrendParser
-                    .parseTimeOfDay(time);
-            if (fireTime == null) {
-                return null;
-            }
-            boolean repeating = Boolean.TRUE.equals(repeat != null ? repeat.enabled : null);
-            Map<String, Boolean> weekDays = repeat != null ? repeat.weekDays : null;
-
-            if (!repeating) {
-                // One-shot: nextTimestamp is the only date source, but a DISABLED
-                // alarm's stale timestamp (already fired) must not win selection -
-                // roll forward a week so it stays in the ordering as "next week".
-                java.time.Instant serverTs =
-                        org.openhab.binding.eightsleep.internal.model.TrendParser.parseTimestamp(
-                                nextTimestamp);
-                if (serverTs != null && !serverTs.isBefore(now)) {
-                    return serverTs;
-                }
-                return rollToNextWeek(serverTs, now);
-            }
-            boolean[] mask = new boolean[7]; // Mon..Sun
-            boolean anyDay = false;
-            if (weekDays != null) {
-                String[] names = { "monday", "tuesday", "wednesday", "thursday", "friday",
-                        "saturday", "sunday" };
-                for (int i = 0; i < names.length; i++) {
-                    if (Boolean.TRUE.equals(weekDays.get(names[i]))) {
-                        mask[i] = true;
-                        anyDay = true;
-                    }
-                }
-            }
-            if (!anyDay) {
-                java.util.Arrays.fill(mask, true); // repeat enabled, no days = daily
-            }
-            java.time.ZoneId effectiveZone = zone;
-            java.time.LocalDate date = now.atZone(effectiveZone).toLocalDate();
-            for (int addDays = 0; addDays < 8; addDays++) {
-                java.time.LocalDate candidateDate = date.plusDays(addDays);
-                int idx = candidateDate.getDayOfWeek().getValue() - 1; // Monday = 0
-                if (!mask[idx]) {
-                    continue;
-                }
-                java.time.Instant candidate = candidateDate.atTime(fireTime)
-                        .atZone(effectiveZone).toInstant();
-                if (!candidate.isBefore(now)) {
-                    return candidate;
-                }
-            }
-            return null;
-        }
-
-        public static class AlarmRepeat {
-            public @Nullable Boolean enabled;
-            public @Nullable Map<String, Boolean> weekDays;
-        }
-    }
-
-    /**
-     * Response of {@code GET /temperature/all}: lists the pod plus any pillow with their
-     * per-device state. Used for Pod 5 pillow support.
-     */
-    public static class PillowData {
-        public @Nullable List<PillowEntry> devices;
-
-        /**
-         * Finds the pillow entry of a given side ("left"/"right"), falling back to the
-         * single side-less entry (solo bed), mirroring the upstream client.
-         */
-        public @Nullable PillowEntry findPillow(String side) {
-            List<PillowEntry> pillows = new ArrayList<>();
-            if (devices == null) {
-                return null;
-            }
-            for (PillowEntry entry : devices) {
-                if (entry.isPillow()) {
-                    pillows.add(entry);
-                }
-            }
-            for (PillowEntry entry : pillows) {
-                if (side.equals(entry.getSide())) {
-                    return entry;
-                }
-            }
-            if (pillows.size() == 1 && pillows.get(0).getSide() == null) {
-                return pillows.get(0);
-            }
-            return null;
-        }
-
-        /** Whether any pod in this payload matches the given device id (bed membership check). */
-        public boolean containsPod(String deviceId) {
-            if (devices == null || deviceId == null) {
-                return false;
-            }
-            for (PillowEntry entry : devices) {
-                if (entry.isPod() && deviceId.equals(entry.getDeviceId())) {
-                    return true;
-                }
-            }
-            return false;
-        }
-    }
-
-    public static class PillowEntry {
-        public @Nullable DeviceInfo device;
-        public @Nullable Double currentLevel;
-        public @Nullable CurrentState currentState;
-
-        public boolean isPillow() {
-            return device != null && "pillow".equals(device.specialization);
-        }
-
-        public boolean isPod() {
-            return device != null && "pod".equals(device.specialization);
-        }
-
-        public @Nullable String getSide() {
-            return device != null ? device.side : null;
-        }
-
-        public @Nullable String getDeviceId() {
-            return device != null ? device.deviceId : null;
-        }
-
-        public boolean isOn() {
-            return currentState != null && currentState.type != null && !"off".equalsIgnoreCase(currentState.type);
-        }
-
-        public int getLevel() {
-            return currentLevel != null ? (int) Math.round(currentLevel.doubleValue()) : 0;
-        }
-
-        public static class DeviceInfo {
-            public @Nullable String specialization;
-            public @Nullable String side;
-            public @Nullable String deviceId;
-        }
-
-        public static class CurrentState {
-            public @Nullable String type;
-        }
-    }
 }

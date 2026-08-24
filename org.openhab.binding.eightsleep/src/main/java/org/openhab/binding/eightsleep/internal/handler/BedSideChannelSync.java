@@ -12,6 +12,10 @@
  */
 package org.openhab.binding.eightsleep.internal.handler;
 
+
+import org.openhab.binding.eightsleep.internal.api.model.Alarm;
+import org.openhab.binding.eightsleep.internal.api.model.PillowData;
+import org.openhab.binding.eightsleep.internal.api.model.PillowEntry;
 import static org.openhab.binding.eightsleep.internal.EightSleepBindingConstants.*;
 
 import java.time.Instant;
@@ -256,8 +260,8 @@ public final class BedSideChannelSync {
         publishBaseChannels(userData.getBaseSide(side), r);
 
         // --- pillow (Pod 5 accessory) ---
-        EightSleepApiClient.PillowData pillowData = userData.pillowData;
-        EightSleepApiClient.PillowEntry pillow = pillowData != null ? pillowData.findPillow(side) : null;
+        PillowData pillowData = userData.pillowData;
+        PillowEntry pillow = pillowData != null ? pillowData.findPillow(side) : null;
         if (pillow != null) {
             int rawPillowLevel = pillow.getLevel();
             addQuantity(r, GROUP_PILLOW, CHANNEL_PILLOW_TARGET_TEMPERATURE,
@@ -310,7 +314,7 @@ public final class BedSideChannelSync {
         }
 
         // --- alarm state ---
-        EightSleepApiClient.Alarm nextAlarm = AlarmSelector.findTargetAlarm(userData, now, zone);
+        Alarm nextAlarm = AlarmSelector.findTargetAlarm(userData, now, zone);
         if (AlarmSelector.shouldClearAlarmChannels(nextAlarm != null, userData.alarms.size(),
                 userData.alarmsPolledAt, now, userIntervalSeconds)) {
             add(r, GROUP_CURRENT, CHANNEL_NEXT_ALARM, UnDefType.UNDEF);

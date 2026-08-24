@@ -12,6 +12,11 @@
  */
 package org.openhab.binding.eightsleep.internal.api;
 
+
+import org.openhab.binding.eightsleep.internal.api.model.Alarm;
+import org.openhab.binding.eightsleep.internal.api.model.DeviceUsers;
+import org.openhab.binding.eightsleep.internal.api.model.PillowData;
+import org.openhab.binding.eightsleep.internal.api.model.PillowEntry;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -216,10 +221,10 @@ public class EndpointContractTest {
                  "recommendedAlarm":{}}""");
 
         boolean alarmsLive = isLive("alarms-v2");
-        List<EightSleepApiClient.Alarm> alarms = EightSleepApiClient.parseAlarms(body);
+        List<Alarm> alarms = EightSleepApiClient.parseAlarms(body);
         if (!alarmsLive) {
             assertEquals(1, alarms.size());
-            EightSleepApiClient.Alarm alarm = alarms.get(0);
+            Alarm alarm = alarms.get(0);
             assertEquals("6bd72e29-f6ee-432a-b180-721f281d2659", alarm.id);
             assertEquals(Boolean.TRUE, alarm.enabled);
             assertEquals("06:45:00", alarm.time);
@@ -227,7 +232,7 @@ public class EndpointContractTest {
             assertTrue("live account has alarms", alarms.size() >= 1);
         }
         // both modes: every alarm must expose the fields the toggle payload needs
-        for (EightSleepApiClient.Alarm alarm : alarms) {
+        for (Alarm alarm : alarms) {
             assertNotNull(alarm.id);
             assertNotNull(alarm.time);
             assertTrue(alarm.thermal != null || alarm.vibration != null || alarm.repeat != null);
@@ -241,7 +246,7 @@ public class EndpointContractTest {
      */
     @Test
     public void alarmTogglePayloadIsBareAndIntegerized() throws IOException {
-        List<EightSleepApiClient.Alarm> alarms = EightSleepApiClient.parseAlarms("""
+        List<Alarm> alarms = EightSleepApiClient.parseAlarms("""
                 {"alarms":[{"id":"a1","enabled":true,"time":"07:00:00","snoozing":false,
                  "repeat":{"enabled":false},"thermal":{"enabled":true,"level":-10.0},
                  "vibration":{"enabled":true,"level":50.0}}]}""");
@@ -261,7 +266,7 @@ public class EndpointContractTest {
         String liveBody = java.nio.file.Files.readString(java.nio.file.Path.of(
                 java.lang.System.getProperty("eightsleep.fixtures", "target/test-data"),
                 "alarms-v2.json"), StandardCharsets.UTF_8);
-        EightSleepApiClient.Alarm liveAlarm = EightSleepApiClient.parseAlarms(liveBody).get(0);
+        Alarm liveAlarm = EightSleepApiClient.parseAlarms(liveBody).get(0);
         String liveJson = EightSleepApiClient.buildAlarmUpdateBody(liveAlarm, true, null);
         for (String required : new String[] { "\"audio\"", "\"smart\"", "\"tags\"", "\"skipNext\"" }) {
             assertTrue("live alarm body must retain " + required, liveJson.contains(required));
@@ -309,7 +314,7 @@ public class EndpointContractTest {
         String body = fixture("device-users", """
                 {"result":{"leftUserId":"u_left","rightUserId":null,
                  "awaySides":{"left":"u_away"}}}""");
-        EightSleepApiClient.DeviceUsers users = EightSleepApiClient.parseUserIdsForDevice(body);
+        DeviceUsers users = EightSleepApiClient.parseUserIdsForDevice(body);
         if (isLive("device-users")) {
             // live: away users are REMOVED from side slots, so leftUserId may be null.
             // Verify the away rule instead: awaySides-listed + no side slot = away.
@@ -336,13 +341,13 @@ public class EndpointContractTest {
                  {"device":{"specialization":"pillow","side":"left","deviceId":"pil1"},
                   "currentLevel":-15,"currentState":{"type":"smart"}}
                 ]}""");
-        EightSleepApiClient.PillowData data = EightSleepApiClient.parsePillowData(body);
+        PillowData data = EightSleepApiClient.parsePillowData(body);
         if (isLive("temperature-all")) {
             // live capture: shape check only (a pod without a pillow has no pillow entry)
             assertNotNull(data.devices);
             return;
         }
-        EightSleepApiClient.PillowEntry pillow = data.findPillow("left");
+        PillowEntry pillow = data.findPillow("left");
         assertNotNull(pillow);
         assertTrue(pillow.isOn());
         assertEquals(-15, pillow.getLevel());

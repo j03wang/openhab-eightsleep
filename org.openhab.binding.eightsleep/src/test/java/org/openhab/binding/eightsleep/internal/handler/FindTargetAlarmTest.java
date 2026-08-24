@@ -12,6 +12,8 @@
  */
 package org.openhab.binding.eightsleep.internal.handler;
 
+
+import org.openhab.binding.eightsleep.internal.api.model.Alarm;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -43,12 +45,12 @@ public class FindTargetAlarmTest {
     /** Fixed zone for every selection call - CI may run in any timezone. */
     private static final ZoneId ZONE = ZoneId.of("UTC");
 
-    private static EightSleepApiClient.Alarm alarm(String id, String time, String repeatJson) {
-        var alarm = new EightSleepApiClient.Alarm();
+    private static Alarm alarm(String id, String time, String repeatJson) {
+        var alarm = new Alarm();
         alarm.id = id;
         alarm.time = time;
         if (repeatJson != null) {
-            alarm.repeat = new Gson().fromJson(repeatJson, EightSleepApiClient.Alarm.AlarmRepeat.class);
+            alarm.repeat = new Gson().fromJson(repeatJson, Alarm.AlarmRepeat.class);
         }
         return alarm;
     }
@@ -118,16 +120,16 @@ public class FindTargetAlarmTest {
      * Always passes the FIXED zone - never the system default.
      */
     private static final class FindTargetAlarmBridge {
-        static EightSleepApiClient.@org.eclipse.jdt.annotation.Nullable Alarm find(UserDataCache userData,
+        static @org.eclipse.jdt.annotation.Nullable Alarm find(UserDataCache userData,
                 Instant now) {
-            EightSleepApiClient.Alarm result = AlarmSelector.findTargetAlarm(userData, now, ZONE);
+            Alarm result = AlarmSelector.findTargetAlarm(userData, now, ZONE);
             assertFalse("selection must be stable across repeated calls",
                     !resultEquals(result, AlarmSelector.findTargetAlarm(userData, now, ZONE)));
             return result;
         }
 
-        static boolean resultEquals(EightSleepApiClient.@org.eclipse.jdt.annotation.Nullable Alarm a,
-                EightSleepApiClient.@org.eclipse.jdt.annotation.Nullable Alarm b) {
+        static boolean resultEquals(@org.eclipse.jdt.annotation.Nullable Alarm a,
+                @org.eclipse.jdt.annotation.Nullable Alarm b) {
             if (a == b) {
                 return true;
             }

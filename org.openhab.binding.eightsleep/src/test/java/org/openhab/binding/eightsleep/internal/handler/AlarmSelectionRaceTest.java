@@ -12,6 +12,8 @@
  */
 package org.openhab.binding.eightsleep.internal.handler;
 
+
+import org.openhab.binding.eightsleep.internal.api.model.Alarm;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -32,6 +34,8 @@ import org.openhab.binding.eightsleep.internal.model.UserDataCache;
  * alarm B (weekend, enabled), flipping the switch back ON until B's own
  * disable landed.
  *
+ * @author Joe Wang - Initial contribution
+ *
  * The contract: findTargetAlarm must be STABLE across a poll that only changes
  * an alarm's `enabled` flag - schedule data (time/weekDays) drives selection,
  * and a disabled alarm keeps its computed slot instead of being skipped.
@@ -39,9 +43,9 @@ import org.openhab.binding.eightsleep.internal.model.UserDataCache;
 @NonNullByDefault
 public class AlarmSelectionRaceTest {
 
-    private static EightSleepApiClient.Alarm alarm(String id, String time, boolean enabled,
+    private static Alarm alarm(String id, String time, boolean enabled,
             String repeatJson, String nextTimestamp) {
-        var alarm = new EightSleepApiClient.Alarm();
+        var alarm = new Alarm();
         alarm.id = id;
         alarm.time = time;
         alarm.enabled = enabled;
@@ -52,18 +56,18 @@ public class AlarmSelectionRaceTest {
 
     /** Bridges test JSON into the typed AlarmRepeat without touching private DTOs. */
     private static final class GsonBridge {
-        static EightSleepApiClient.Alarm.AlarmRepeat repeat(String weekDaysJson) {
+        static Alarm.AlarmRepeat repeat(String weekDaysJson) {
             return parseRepeat("{\"repeat\":{\"enabled\":true,\"weekDays\":" + weekDaysJson + "}}");
         }
 
-        static EightSleepApiClient.Alarm.AlarmRepeat repeatDisabled() {
+        static Alarm.AlarmRepeat repeatDisabled() {
             return parseRepeat("{\"repeat\":{\"enabled\":false}}");
         }
 
-        private static EightSleepApiClient.Alarm.AlarmRepeat parseRepeat(String body) {
+        private static Alarm.AlarmRepeat parseRepeat(String body) {
             var obj = com.google.gson.JsonParser.parseString(body).getAsJsonObject();
             return new com.google.gson.Gson().fromJson(obj.get("repeat"),
-                    EightSleepApiClient.Alarm.AlarmRepeat.class);
+                    Alarm.AlarmRepeat.class);
         }
     }
 

@@ -12,6 +12,9 @@
  */
 package org.openhab.binding.eightsleep.internal.model;
 
+
+import org.openhab.binding.eightsleep.internal.api.model.PillowData;
+import org.openhab.binding.eightsleep.internal.api.model.Alarm;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -30,12 +33,12 @@ import org.openhab.binding.eightsleep.internal.api.EightSleepApiClient;
 @NonNullByDefault
 public class UserDataCache {
 
-    public final List<EightSleepApiClient.Alarm> alarms = new CopyOnWriteArrayList<>();
+    public final List<Alarm> alarms = new CopyOnWriteArrayList<>();
     /** When {@code alarms} was last fetched - used for last-write-wins merging. */
     public volatile java.time.@Nullable Instant alarmsPolledAt;
     public volatile org.openhab.binding.eightsleep.internal.model.@Nullable BaseData baseData;
     public volatile org.openhab.binding.eightsleep.internal.model.@Nullable PlayerState playerState;
-    public volatile EightSleepApiClient.@Nullable PillowData pillowData;
+    public volatile PillowData pillowData;
     /** Raw /temperature payload (currentLevel, smart schedule, ...). */
     public volatile com.google.gson.@Nullable JsonObject temperature;
     /** When {@code temperature} was fetched - used for last-write-wins merging. */

@@ -12,6 +12,9 @@
  */
 package org.openhab.binding.eightsleep.internal.api;
 
+
+import org.openhab.binding.eightsleep.internal.api.model.DeviceUsers;
+import org.openhab.binding.eightsleep.internal.api.model.PillowData;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
@@ -34,8 +37,8 @@ import org.junit.Test;
 @NonNullByDefault
 public class DeviceUsersTest {
 
-    private static EightSleepApiClient.DeviceUsers users(String left, String right, Map<String, String> awaySides) {
-        EightSleepApiClient.DeviceUsers users = new EightSleepApiClient.DeviceUsers();
+    private static DeviceUsers users(String left, String right, Map<String, String> awaySides) {
+        DeviceUsers users = new DeviceUsers();
         users.leftUserId = left;
         users.rightUserId = right;
         users.awaySides = new java.util.HashMap<>(awaySides);
@@ -122,6 +125,6 @@ public class DeviceUsersTest {
         assertNull(data.findPillow("left"));
         assertTrue(data.containsPod("dev1"));
         assertFalse(data.containsPod("dev_other"));
-        assertFalse(new EightSleepApiClient.PillowData().containsPod("dev1"));
+        assertFalse(new PillowData().containsPod("dev1"));
     }
 }

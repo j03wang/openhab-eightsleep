@@ -28,7 +28,8 @@ import org.eclipse.jdt.annotation.Nullable;
  * @author Joe Wang - Initial contribution
  */
 @NonNullByDefault
-public final class AwayModeTracker {
+public final class AwayModeTracker
+        implements org.openhab.binding.eightsleep.internal.polling.AccountPoller.AwayModeTrackerHolder {
 
     private volatile boolean polledOnce;
     private final java.util.concurrent.ConcurrentHashMap<String, Instant> commandedAt = new java.util.concurrent.ConcurrentHashMap<>();
@@ -56,5 +57,10 @@ public final class AwayModeTracker {
     /** True once an away state is known (commanded or polled). */
     public boolean isKnown() {
         return polledOnce;
+    }
+
+    @Override
+    public void markPolled() {
+        polledOnce = true;
     }
 }

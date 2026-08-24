@@ -12,6 +12,9 @@
  */
 package org.openhab.binding.eightsleep.internal.api;
 
+
+import org.openhab.binding.eightsleep.internal.api.model.Alarm;
+import org.openhab.binding.eightsleep.internal.api.model.DeviceUsers;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -96,7 +99,7 @@ public class ParserEdgeCasesTest {
 
     @Test
     public void filterResponseWithNullAwaySidesDefaultsToEmpty() {
-        EightSleepApiClient.DeviceUsers users = EightSleepApiClient.parseUserIdsForDevice(
+        DeviceUsers users = EightSleepApiClient.parseUserIdsForDevice(
                 "{\"result\":{\"leftUserId\":\"l\",\"rightUserId\":\"r\",\"awaySides\":null}}");
         assertEquals("l", users.leftUserId);
         assertEquals("r", users.rightUserId);
@@ -105,7 +108,7 @@ public class ParserEdgeCasesTest {
 
     @Test
     public void emptyResultYieldsEmptyUsers() {
-        EightSleepApiClient.DeviceUsers users = EightSleepApiClient.parseUserIdsForDevice("{\"result\":null}");
+        DeviceUsers users = EightSleepApiClient.parseUserIdsForDevice("{\"result\":null}");
         assertNull(users.leftUserId);
         assertNull(users.rightUserId);
         assertTrue(users.awaySides.isEmpty());
@@ -113,7 +116,7 @@ public class ParserEdgeCasesTest {
 
     // ==================== buildAlarmUpdateBody extras ====================
 
-    private static EightSleepApiClient.Alarm fullAlarm() {
+    private static Alarm fullAlarm() {
         return EightSleepApiClient.parseAlarms("""
                 {"alarms":[{"id":"a1","enabled":true,"time":"07:15:30","snoozing":false,
                  "repeat":{"enabled":true,"weekDays":{"monday":true}},
@@ -148,7 +151,7 @@ public class ParserEdgeCasesTest {
 
     @Test
     public void nullSectionsGetUpstreamDefaults() {
-        var bare = new EightSleepApiClient.Alarm();
+        var bare = new Alarm();
         bare.id = "bare";
         bare.time = null;
         String json = EightSleepApiClient.buildAlarmUpdateBody(bare, true, null);
