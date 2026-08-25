@@ -22,7 +22,6 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 import org.openhab.binding.eightsleep.internal.api.ApiException;
 import org.openhab.binding.eightsleep.internal.api.EightSleepApiClient;
-import org.openhab.binding.eightsleep.internal.handler.AwayModeTracker;
 import org.openhab.binding.eightsleep.internal.model.UserDataCache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -87,10 +86,12 @@ public class AccountPoller {
      * Away-state read model (verified against live captures):
      * away = user in awaySides AND removed from their side slot;
      * present = user occupies a side slot (even though awaySides still lists them).
-     *
-     * @param awayModeTracker command-stamp bookkeeping for the LWW merge
+     * <p>
+     * Observations are written unconditionally with their START stamp; the merge
+     * against commanded stamps happens in the channel sync, like every other
+     * mutable channel.
      */
-    public void pollAwayState(AwayModeTrackerHolder tracker) {
+    public void pollAwayState() {
         // Stamp with the START time: the payload reflects the world as it was when
         // the request was issued, so any command sent while it is in flight is newer.
         Instant observedAt = Instant.now();
@@ -106,14 +107,9 @@ public class AccountPoller {
 
             for (String uid : candidates) {
                 UserDataCache data = cacheFor.apply(uid);
-                boolean away = users.isAway(uid);
-                // last-write-wins: ignore a polled value that predates a command
-                if (AwayModeTracker.acceptsPolledAway(tracker.commandedAtOf(uid), observedAt)) {
-                    data.awayMode = away;
-                    data.awayPolledAt = observedAt;
-                }
+                data.awayObserved = users.isAway(uid);
+                data.awayPolledAt = observedAt;
             }
-            tracker.markPolled();
         }).exceptionally(ex -> {
             LOGGER.debug("Failed to refresh away-mode state: {}",
                     ex.getCause() != null ? ex.getCause().getMessage() : ex.getMessage());
@@ -203,10 +199,4 @@ public class AccountPoller {
         }
     }
 
-    /** Minimal surface the poller needs from the account's away-mode bookkeeping. */
-    public interface AwayModeTrackerHolder {
-        java.time.@Nullable Instant commandedAtOf(String userId);
-
-        void markPolled();
-    }
 }

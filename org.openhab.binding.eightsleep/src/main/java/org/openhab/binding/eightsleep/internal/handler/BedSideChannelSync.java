@@ -88,6 +88,9 @@ public final class BedSideChannelSync {
         public @Nullable Double lastKnownTargetLevel;
         /** Set when the server confirmed the side-power command and it may be retired. */
         public boolean retireSidePowerCommand;
+
+        /** Set when the polled away state confirmed the away command and it may be retired. */
+        public boolean retireAwayModeCommand;
         /** Alarm id whose enabled-command the server confirmed (null = none). */
         public @Nullable String retireAlarmId;
     }
@@ -101,12 +104,13 @@ public final class BedSideChannelSync {
      *
      * @param sidePowerCommand pending side-power command stamp (null = none)
      * @param alarmEnabledCommand pending command stamp for the selected alarm (null = none)
+     * @param awayModeCommand pending away-mode command stamp (null = none)
      * @param lastKnownTargetLevel previously persisted shown target level (null = never set)
      */
     public static Result compute(@Nullable DeviceData deviceData, @Nullable UserDataCache userData,
-            String side, boolean fahrenheit, boolean awayPolledOnce, long userIntervalSeconds, Instant now,
+            String side, boolean fahrenheit, long userIntervalSeconds, Instant now,
             ZoneId zone, @Nullable CommandedValue sidePowerCommand, @Nullable CommandedValue alarmEnabledCommand,
-            @Nullable Double lastKnownTargetLevel) {
+            @Nullable CommandedValue awayModeCommand, @Nullable Double lastKnownTargetLevel) {
         Result r = new Result();
 
         if (deviceData == null) {
@@ -295,11 +299,20 @@ public final class BedSideChannelSync {
             }
         }
 
-        // --- away mode: UNDEF until the first poll/command has spoken ---
-        if (!awayPolledOnce) {
+        // --- away mode: UNDEF until THIS user has spoken (polled or commanded);
+        // otherwise resolved by the same last-write-wins merge as every mutable channel ---
+        boolean awayKnown = userData.awayPolledAt.isAfter(Instant.EPOCH) || awayModeCommand != null;
+        if (!awayKnown) {
             add(r, GROUP_DEVICE, CHANNEL_AWAY_MODE, UnDefType.UNDEF);
         } else {
-            add(r, GROUP_DEVICE, CHANNEL_AWAY_MODE, OnOffType.from(userData.awayMode));
+            Boolean resolvedAway = LastWriteWins.resolveLatest(userData.awayObserved, userData.awayPolledAt,
+                    awayModeCommand);
+            boolean away = Boolean.TRUE.equals(resolvedAway);
+            add(r, GROUP_DEVICE, CHANNEL_AWAY_MODE, OnOffType.from(away));
+            if (awayModeCommand != null
+                    && LastWriteWins.shouldRetireCommand(userData.awayObserved, resolvedAway)) {
+                r.retireAwayModeCommand = true;
+            }
         }
 
         // --- side power (live, last-write-wins against the temperature poll) ---

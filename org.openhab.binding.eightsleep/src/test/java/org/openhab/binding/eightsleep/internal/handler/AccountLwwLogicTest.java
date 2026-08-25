@@ -42,25 +42,31 @@ import static org.mockito.Mockito.mock;
 @NonNullByDefault
 public class AccountLwwLogicTest {
 
-    // ==================== acceptsPolledAway ordering table ====================
+    // ==================== away LWW ordering (via LastWriteWins) ====================
 
+    /**
+     * The away merge shares {@link LastWriteWins#resolveLatest} with every other
+     * mutable channel: a poll that STARTED before the command carries pre-command
+     * data and loses; ties go to the polled value.
+     */
     @Test
     public void awayPollOrderingTable() {
         Instant commandAt = Instant.parse("2026-08-22T15:00:00Z");
+        var command = new LastWriteWins.CommandedValue(commandAt, true);
 
-        // no command -> always accept
-        assertTrue(AwayModeTracker.acceptsPolledAway(null, commandAt));
-        assertTrue(AwayModeTracker.acceptsPolledAway(null, commandAt.plusSeconds(600)));
+        // no command -> polled value wins
+        assertEquals(Boolean.TRUE, LastWriteWins.resolveLatest(true, commandAt, null));
 
-        // a poll that STARTED before the command carries pre-command data: rejected.
-        // An exact tie follows the LWW convention - ties go to the polled value.
-        assertFalse(AwayModeTracker.acceptsPolledAway(commandAt, commandAt.minusSeconds(60)));
-        assertTrue(AwayModeTracker.acceptsPolledAway(commandAt, commandAt));
-        // a poll started after the command is newer information: accepted - even if it
-        // still reports the old value, because that is server truth (not yet applied,
-        // or changed back from elsewhere)
-        assertTrue(AwayModeTracker.acceptsPolledAway(commandAt, commandAt.plusSeconds(1)));
-        assertTrue(AwayModeTracker.acceptsPolledAway(commandAt, commandAt.plusNanos(1)));
+        // a poll that STARTED before the command carries pre-command data: the
+        // COMMAND's value resolves regardless of what the stale poll observed.
+        assertEquals(Boolean.TRUE, LastWriteWins.resolveLatest(false, commandAt.minusSeconds(60), command));
+        assertEquals(Boolean.TRUE, LastWriteWins.resolveLatest(true, commandAt.minusSeconds(60), command));
+
+        // an exact tie and later polls follow the polled value - server truth even
+        // when it still reports the old value (not yet applied, or changed back)
+        assertEquals(Boolean.FALSE, LastWriteWins.resolveLatest(false, commandAt, command));
+        assertEquals(Boolean.TRUE, LastWriteWins.resolveLatest(true, commandAt.plusNanos(1), command));
+        assertEquals(Boolean.FALSE, LastWriteWins.resolveLatest(false, commandAt.plusNanos(1), command));
     }
 
     // ==================== clampInterval ====================
@@ -118,42 +124,32 @@ public class AccountLwwLogicTest {
         assertEquals("dev_a", AccountHandler.chooseDeviceId(devices, "  ", LOG));
     }
 
-    // ==================== registration counting on the REAL handler ====================
+    // ==================== 1:1 registration on the REAL handler ====================
 
     /**
      * Exercises the actual {@link AccountHandler#registerBedSide}/{@link #unregisterBedSide}
-     * implementations over a bare Bridge instance (no framework runtime needed): the
-     * first registration wins the side slot, re-registration is idempotent, cached user
-     * data survives until the last reference goes away, and unknown unregistration is a no-op.
+     * implementations over a bare Bridge instance (no framework runtime needed): a user
+     * owns at most one bed side (1:1), re-registration is idempotent, cached user data
+     * is dropped on unregister, and unknown unregistration is a no-op.
      */
     @Test
-    public void referenceCountingOnRealHandler() {
+    public void registrationOnRealHandler() {
         Bridge bridge = mock(Bridge.class);
         AccountHandler account = new AccountHandler(bridge);
 
         assertTrue("first registration returns true", account.registerBedSide("u1", "left"));
         assertFalse("re-registration (e.g. bridgeStatusChanged) is idempotent", account.registerBedSide("u1", "left"));
-        assertFalse(account.registerBedSide("u1", "right"));
+        assertFalse("a second thing claiming the same user (1:1 model) is rejected", account.registerBedSide("u1", "right"));
 
-        // cached data exists while at least one thing references the user
-        account.setLastKnownAwayMode("u1", true);
+        // a polled observation creates the entry; unregister drops it
+        account.getUserDataOrCreate("u1");
         assertNotNull(account.getUserData("u1"));
-
-        assertFalse("data must survive while references remain", dropsReference(account, "u1"));
-        assertFalse("still referenced after the second dispose", dropsReference(account, "u1"));
-        assertNotNull(account.getUserData("u1"));
-        assertTrue("last unregister drops the user entirely", dropsReference(account, "u1"));
-        assertNull("user fully removed", account.getUserData("u1"));
+        account.unregisterBedSide("u1");
+        assertNull("unregister drops the user's cache immediately", account.getUserData("u1"));
+        assertTrue("after unregister the userId can be registered again", account.registerBedSide("u1", "right"));
 
         // unregistering an unknown user must not throw
         account.unregisterBedSide("ghost");
-    }
-
-    /** One unregister call; mirrors dispose() semantics by returning whether data was dropped. */
-    private static boolean dropsReference(AccountHandler account, String userId) {
-        int sizeBefore = java.util.Optional.ofNullable(account.getUserData(userId)).map(u -> 1).orElse(0);
-        account.unregisterBedSide(userId);
-        return sizeBefore == 1 && account.getUserData(userId) == null;
     }
 
     /**

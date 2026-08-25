@@ -24,7 +24,6 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.junit.Test;
 import org.openhab.binding.eightsleep.internal.api.EightSleepApiClient;
 import org.openhab.binding.eightsleep.internal.api.TokenManager;
-import org.openhab.binding.eightsleep.internal.handler.AwayModeTracker;
 import org.openhab.binding.eightsleep.internal.model.UserDataCache;
 
 /**
@@ -83,7 +82,6 @@ public class AccountPollerIdentityTest {
                     return new UserDataCache();
                 }, () -> {
                 });
-        AwayModeTracker tracker = new AwayModeTracker();
 
         poller.register("u-old");
         poller.close();

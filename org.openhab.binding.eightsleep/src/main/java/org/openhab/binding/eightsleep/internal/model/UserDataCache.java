@@ -45,10 +45,12 @@ public class UserDataCache {
     public volatile java.time.@Nullable Instant temperatureAt;
     /** Raw v1 trends "days" payload, parsed defensively on read. */
     public volatile com.google.gson.JsonArray trendDays = new com.google.gson.JsonArray();
-    public volatile boolean awayMode;
-    /** Instant of the last command that set awayMode (for last-write-wins). */
-    public volatile java.time.@Nullable Instant awayCommandedAt;
-    /** Instant of the last successful away-state poll; epoch means "never". */
+    /**
+     * Last OBSERVED away state (raw poll result, unmerged). The channel sync
+     * resolves this against the pending command stamp held by the account.
+     */
+    public volatile boolean awayObserved = false;
+    /** When {@code awayObserved} was seen - the away poll's START time. */
     public volatile Instant awayPolledAt = Instant.EPOCH;
     /**
      * When cached data was last (re)freshed - the construction moment counts as

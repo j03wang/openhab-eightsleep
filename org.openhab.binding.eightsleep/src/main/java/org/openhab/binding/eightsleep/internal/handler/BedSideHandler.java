@@ -140,7 +140,12 @@ public class BedSideHandler extends BaseThingHandler {
         }
         // Register even when the bridge is still connecting: the poll loop only reports
         // users that are registered, so late registration would silently skip this sleeper.
-        account.registerBedSide(userId, side);
+        if (!account.registerBedSide(userId, side)) {
+            // 1:1 model: another bedSide thing already owns this userId
+            updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.CONFIGURATION_ERROR,
+                    "@text/bedside.status.duplicate-user");
+            return;
+        }
         // Always run the channel-sync job; it reports OFFLINE(BRIDGE_OFFLINE) until the
         // bridge has data and flips ONLINE by itself once polls succeed.
         startRefreshJob(account);
@@ -172,7 +177,11 @@ public class BedSideHandler extends BaseThingHandler {
             account.unregisterBedSide(this.userId);
             this.userId = newUserId;
         }
-        account.registerBedSide(this.userId, this.side);
+        if (!account.registerBedSide(this.userId, this.side)) {
+            updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.CONFIGURATION_ERROR,
+                    "@text/bedside.status.duplicate-user");
+            return;
+        }
         startRefreshJob(account);
         scheduleOneShotSync(account, 0);
     }
@@ -324,10 +333,10 @@ public class BedSideHandler extends BaseThingHandler {
         BedSideChannelSync.Result result;
         try {
             result = BedSideChannelSync.compute(deviceData, userData, side,
-                    account.getTemperatureUnit('c') == 'f', account.isAwayPolledOnce(),
+                    account.getTemperatureUnit('c') == 'f',
                     account.userRefreshIntervalSeconds(), Instant.now(), java.time.ZoneId.systemDefault(),
-                    commanded.get(CHANNEL_SIDE_POWER),
-                    alarmEnabledCommandStamp(account), lastKnownTargetLevel);
+                    commanded.get(CHANNEL_SIDE_POWER), alarmEnabledCommandStamp(account),
+                    commanded.get(CHANNEL_AWAY_MODE), lastKnownTargetLevel);
         } catch (RuntimeException e) {
             // A payload quirk must not kill the periodic job; treat as stale data.
             logger.warn("Channel sync computation failed for user {} side '{}': {}", userId, side, e.getMessage(), e);
@@ -379,6 +388,9 @@ public class BedSideHandler extends BaseThingHandler {
         }
         if (result.retireSidePowerCommand) {
             commanded.remove(CHANNEL_SIDE_POWER); // server confirmed
+        }
+        if (result.retireAwayModeCommand) {
+            commanded.remove(CHANNEL_AWAY_MODE); // polled state confirmed the command
         }
         if (result.retireAlarmId != null) {
             commandedAlarms.remove(result.retireAlarmId); // server confirmed

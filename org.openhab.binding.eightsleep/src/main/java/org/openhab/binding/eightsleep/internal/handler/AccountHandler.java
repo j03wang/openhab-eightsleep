@@ -99,8 +99,7 @@ public class AccountHandler extends BaseBridgeHandler {
     private volatile boolean speakerAvailable;
 
     private final Map<String, UserDataCache> userDataByUser = new ConcurrentHashMap<>();
-    /** userId -> number of bedSide things currently registered for it. */
-    private final Map<String, Integer> registrationCountByUser = new ConcurrentHashMap<>();
+    /** userId -> side of the single bedSide thing registered for it (1:1 model). */
     private final Map<String, String> sideByUserId = new ConcurrentHashMap<>();
     private volatile @Nullable String deviceId;
 
@@ -226,7 +225,7 @@ public class AccountHandler extends BaseBridgeHandler {
         }, baseInterval, baseInterval, TimeUnit.SECONDS));
         pollJobs.add(scheduler.scheduleWithFixedDelay(() -> {
             if (generation == lifecycleGeneration) {
-                poller.pollAwayState(awayModeTracker);
+                poller.pollAwayState();
             }
         }, 2, deviceInterval, TimeUnit.SECONDS));
 
@@ -276,23 +275,6 @@ public class AccountHandler extends BaseBridgeHandler {
     public long userRefreshIntervalSeconds() {
         return AccountConfigParser.clampInterval(getConfigAs(AccountConfiguration.class).userRefreshInterval, 15, 600);
     }
-
-    /**
-     * Records a commanded away state: optimistic cache write plus the LWW command
-     * stamp so the next poll cannot overwrite it.
-     */
-    public void setLastKnownAwayMode(String userId, boolean away) {
-        UserDataCache data = userDataByUser.computeIfAbsent(userId, k -> new UserDataCache());
-        data.awayMode = away;
-        awayModeTracker.recordCommand(userId);
-    }
-
-    /** True once an away state is known (commanded or polled). */
-    public boolean isAwayPolledOnce() {
-        return awayModeTracker.isKnown();
-    }
-
-    private final AwayModeTracker awayModeTracker = new AwayModeTracker();
 
     private void pollBaseData(EightSleepApiClient client) {
         for (String userId : Set.copyOf(sideByUserId.keySet())) {
@@ -393,6 +375,14 @@ public class AccountHandler extends BaseBridgeHandler {
         return userDataByUser.get(userId);
     }
 
+    /**
+     * Returns the cache entry for a user, creating it when absent. The poll fan-out
+     * uses this on every observation write; commands deliberately do not.
+     */
+    public UserDataCache getUserDataOrCreate(String userId) {
+        return userDataByUser.computeIfAbsent(userId, k -> new UserDataCache());
+    }
+
     public @Nullable String getDeviceId() {
         return deviceId;
     }
@@ -406,31 +396,28 @@ public class AccountHandler extends BaseBridgeHandler {
     }
 
     /**
-     * Registers a bed side thing with the account so its user gets polled.
+     * Registers the single bedSide thing for a user. Under the 1:1 model each user
+     * owns at most one thing (left, right or solo).
      *
-     * @return true when this was the first registration for the user id
+     * @return true when this registration is new (first claim of the user id)
      */
     public boolean registerBedSide(String userId, String side) {
-        Integer count = registrationCountByUser.merge(userId, 1, Integer::sum);
-        if (count == 1) {
-            sideByUserId.put(userId, side);
+        boolean first = sideByUserId.putIfAbsent(userId, side) == null;
+        if (first) {
+            AccountPoller p = poller;
+            if (p != null) {
+                p.register(userId);
+            }
         }
-        AccountPoller p = poller;
-        if (p != null) {
-            p.register(userId);
-        }
-        return count == 1;
+        return first;
     }
 
     /**
-     * Unregisters a bed side thing. Polling and cached data for the user are dropped
-     * only when the last thing referencing the user goes away.
+     * Unregisters the bedSide thing for a user: polling and cached data are dropped
+     * immediately.
      */
     public void unregisterBedSide(String userId) {
-        Integer count = registrationCountByUser.computeIfPresent(userId, (k, v) -> v > 1 ? v - 1 : null);
-        if (count == null) {
-            // last reference gone: stop polling and forget the cached data
-            sideByUserId.remove(userId);
+        if (sideByUserId.remove(userId) != null) {
             userDataByUser.remove(userId);
             AccountPoller p = poller;
             if (p != null) {

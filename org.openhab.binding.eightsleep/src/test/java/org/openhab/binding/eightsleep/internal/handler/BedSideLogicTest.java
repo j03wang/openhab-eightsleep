@@ -317,23 +317,25 @@ public class BedSideLogicTest {
         assertEquals("idle", BedSideChannelSync.deriveHeatingState(false, -80));
     }
 
-    // ==================== acceptsPolledAway ====================
+    // ==================== away LWW (via LastWriteWins) ====================
 
+    /** No pending command: the polled value always wins. */
     @Test
     public void noPriorCommandAcceptsAnyPoll() {
-        assertTrue(AwayModeTracker.acceptsPolledAway(null, NOW));
+        assertEquals(Boolean.TRUE, LastWriteWins.resolveLatest(true, NOW, null));
+        assertEquals(Boolean.FALSE, LastWriteWins.resolveLatest(false, NOW, null));
     }
 
     /** A poll started after the command is newer information, even 1 s later. */
     @Test
     public void pollStartedAfterCommandAccepted() {
-        Instant commandAt = NOW;
+        var command = new LastWriteWins.CommandedValue(NOW, false);
         assertTrue("post-command polls are server truth",
-                AwayModeTracker.acceptsPolledAway(commandAt, commandAt.plusSeconds(1)));
-        assertTrue(AwayModeTracker.acceptsPolledAway(commandAt, commandAt.plusNanos(1)));
-        assertTrue(AwayModeTracker.acceptsPolledAway(commandAt, commandAt.plusSeconds(60)));
+                Boolean.TRUE.equals(LastWriteWins.resolveLatest(true, NOW.plusSeconds(1), command)));
+        assertTrue(Boolean.TRUE.equals(LastWriteWins.resolveLatest(true, NOW.plusNanos(1), command)));
+        assertTrue(Boolean.TRUE.equals(LastWriteWins.resolveLatest(true, NOW.plusSeconds(60), command)));
         assertFalse("a poll started before the command is pre-command data",
-                AwayModeTracker.acceptsPolledAway(commandAt, commandAt.minusSeconds(60)));
+                Boolean.TRUE.equals(LastWriteWins.resolveLatest(true, NOW.minusSeconds(60), command)));
     }
 
     // ==================== autopilotTargetLevel / shouldClearAlarmChannels ====================

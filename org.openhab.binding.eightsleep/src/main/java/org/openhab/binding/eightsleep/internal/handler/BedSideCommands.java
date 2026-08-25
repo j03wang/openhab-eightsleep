@@ -16,6 +16,7 @@ package org.openhab.binding.eightsleep.internal.handler;
 import org.openhab.binding.eightsleep.internal.api.model.Alarm;
 import org.openhab.binding.eightsleep.internal.api.model.PillowData;
 import org.openhab.binding.eightsleep.internal.api.model.PillowEntry;
+import static org.openhab.binding.eightsleep.internal.EightSleepBindingConstants.CHANNEL_AWAY_MODE;
 import static org.openhab.binding.eightsleep.internal.EightSleepBindingConstants.DEFAULT_SNOOZE_MINUTES;
 
 import java.time.Instant;
@@ -272,8 +273,9 @@ public final class BedSideCommands {
             return;
         }
         boolean start = command == OnOffType.ON;
-        // Instant feedback; the away poll (verified side-slot rule) confirms/corrects.
-        ctx.account().setLastKnownAwayMode(ctx.userId(), start);
+        // Optimistic feedback + timestamped stamp (LWW vs the away poll), same as
+        // the other mutable channels; the away poll confirms/corrects.
+        ctx.commanded().put(CHANNEL_AWAY_MODE, new CommandedValue(Instant.now(), start));
         // side is the configured physical side; the client skips re-assertion when it
         // is not a genuine left/right (solo beds must not be rewritten).
         apply(ctx, ctx.client().setAwayMode(ctx.userId(), devId, ctx.soloBed() ? "solo" : ctx.side(),
