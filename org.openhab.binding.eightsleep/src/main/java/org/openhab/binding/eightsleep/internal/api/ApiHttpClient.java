@@ -85,15 +85,6 @@ public class ApiHttpClient {
         return HTTP_CLIENT.sendAsync(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
                 .thenCompose(response -> {
                     int status = response.statusCode();
-                    // Single-line body capture for fixture extraction:
-                    // grep 'EIGHTSLEEP-BODY' openhab.log
-                    if (LOGGER.isTraceEnabled()) {
-                        String path = URI.create(url).getPath().replaceFirst("^/v[0-9]+", "")
-                                .replaceAll("[a-f0-9-]{16,}", "{id}")
-                                .replaceAll("/\\d{4,}", "/{id}");
-                        LOGGER.trace("EIGHTSLEEP-BODY {} {} {} {}", method, path, status,
-                                response.body() == null ? "" : response.body().replace('\n', ' ').trim());
-                    }
                     if (status >= 200 && status < 300) {
                         return CompletableFuture.completedFuture(response.body());
                     }
