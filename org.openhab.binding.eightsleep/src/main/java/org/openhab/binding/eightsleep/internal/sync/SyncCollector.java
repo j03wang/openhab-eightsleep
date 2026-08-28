@@ -17,7 +17,13 @@ import java.util.List;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
+import org.openhab.binding.eightsleep.internal.sync.SyncResult.ChannelUpdate;
 import org.openhab.binding.eightsleep.internal.sync.SyncResult.StatusAction;
+import org.openhab.binding.eightsleep.internal.temperature.HeatingLevelConversion;
+import org.openhab.core.library.types.QuantityType;
+import org.openhab.core.library.unit.ImperialUnits;
+import org.openhab.core.library.unit.SIUnits;
+import org.openhab.core.types.State;
 
 @NonNullByDefault
 final class SyncCollector {
@@ -31,6 +37,15 @@ final class SyncCollector {
     boolean retireAwayModeCommand;
     @Nullable
     String retireAlarmId;
+
+    void add(String group, String channel, State state) {
+        updates.add(new ChannelUpdate(group + "#" + channel, state));
+    }
+
+    void addTemperature(String group, String channel, double level, boolean fahrenheit) {
+        add(group, channel, new QuantityType<>(HeatingLevelConversion.levelToTemperature(level, fahrenheit),
+                fahrenheit ? ImperialUnits.FAHRENHEIT : SIUnits.CELSIUS));
+    }
 
     SyncResult build() {
         return new SyncResult(updates, statusAction, targetLevelAbsent, lastKnownTargetLevel, retireSidePowerCommand,

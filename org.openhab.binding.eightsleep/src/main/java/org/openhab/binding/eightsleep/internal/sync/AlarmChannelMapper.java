@@ -13,7 +13,6 @@
 package org.openhab.binding.eightsleep.internal.sync;
 
 import static org.openhab.binding.eightsleep.internal.EightSleepBindingConstants.*;
-import static org.openhab.binding.eightsleep.internal.sync.SyncChannels.add;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -41,24 +40,24 @@ final class AlarmChannelMapper {
         Alarm alarm = AlarmSelector.findTargetAlarm(userData.alarms(), now, zone);
         if (AlarmSelector.shouldClearAlarmChannels(alarm != null, userData.alarms().size(), userData.alarmsPolledAt(),
                 now, userIntervalSeconds)) {
-            add(collector, GROUP_CURRENT, CHANNEL_NEXT_ALARM, UnDefType.UNDEF);
-            add(collector, GROUP_CURRENT, CHANNEL_ALARM_ENABLED, UnDefType.UNDEF);
-            add(collector, GROUP_CURRENT, CHANNEL_ALARM_TIME, UnDefType.UNDEF);
+            collector.add(GROUP_CURRENT, CHANNEL_NEXT_ALARM, UnDefType.UNDEF);
+            collector.add(GROUP_CURRENT, CHANNEL_ALARM_ENABLED, UnDefType.UNDEF);
+            collector.add(GROUP_CURRENT, CHANNEL_ALARM_TIME, UnDefType.UNDEF);
         }
         if (alarm == null || alarm.id() == null) {
             return;
         }
         Instant nextRun = alarm.computeNextRun(zone, now);
         if (nextRun != null) {
-            add(collector, GROUP_CURRENT, CHANNEL_NEXT_ALARM, new DateTimeType(nextRun));
+            collector.add(GROUP_CURRENT, CHANNEL_NEXT_ALARM, new DateTimeType(nextRun));
         }
         if (alarm.time() != null) {
-            add(collector, GROUP_CURRENT, CHANNEL_ALARM_TIME,
+            collector.add(GROUP_CURRENT, CHANNEL_ALARM_TIME,
                     new DateTimeType(alarm.time().atDate(LocalDate.ofInstant(now, zone)).atZone(zone).toInstant()));
         }
         Boolean resolved = LastWriteWins.resolveLatest(alarm.enabled(), userData.alarmsPolledAt(), alarmEnabledCommand);
         if (resolved != null) {
-            add(collector, GROUP_CURRENT, CHANNEL_ALARM_ENABLED, OnOffType.from(resolved));
+            collector.add(GROUP_CURRENT, CHANNEL_ALARM_ENABLED, OnOffType.from(resolved));
             if (LastWriteWins.shouldRetireCommand(alarm.enabled(), resolved)) {
                 collector.retireAlarmId = alarm.id();
             }

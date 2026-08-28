@@ -27,7 +27,7 @@ import java.util.Map;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.junit.Test;
-import org.openhab.binding.eightsleep.internal.api.GsonHelper;
+import org.openhab.binding.eightsleep.internal.api.ApiJsonCodec;
 
 /**
  * Regression tests for the alarm schedule computation that replaced reliance on
@@ -42,7 +42,7 @@ public class AlarmScheduleTest {
     private Alarm alarm(String time, boolean enabled, String weekDaysJson) {
         Alarm.AlarmRepeat repeat;
         if (weekDaysJson != null) {
-            repeat = GsonHelper.fromJson("{\"enabled\":true,\"weekDays\":" + weekDaysJson + "}",
+            repeat = new ApiJsonCodec().fromJson("{\"enabled\":true,\"weekDays\":" + weekDaysJson + "}",
                     Alarm.AlarmRepeat.class);
         } else {
             repeat = new Alarm.AlarmRepeat(false, Map.of());

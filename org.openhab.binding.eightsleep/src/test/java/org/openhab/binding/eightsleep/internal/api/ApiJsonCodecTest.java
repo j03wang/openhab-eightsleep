@@ -20,13 +20,13 @@ import org.eclipse.jdt.annotation.Nullable;
 import org.junit.Test;
 
 /**
- * Null-handling contracts of the shared Gson facade that parsers rely on:
+ * Null-handling contracts of the injected JSON codec that API components rely on:
  * toJson(null) yields null (never "null") and blank bodies deserialize to null.
  *
  * @author Joe Wang - Initial contribution
  */
 @NonNullByDefault
-public class GsonHelperTest {
+public class ApiJsonCodecTest {
 
     private static class Payload {
         public @Nullable String value;
@@ -34,7 +34,7 @@ public class GsonHelperTest {
 
     @Test
     public void nullObjectSerializesToNull() {
-        assertNull(GsonHelper.toJson(null));
+        assertNull(new ApiJsonCodec().toJson(null));
     }
 
     /** Round-trip of a simple payload. */
@@ -42,16 +42,16 @@ public class GsonHelperTest {
     public void payloadRoundTrip() {
         Payload payload = new Payload();
         payload.value = "x";
-        String json = GsonHelper.toJson(payload);
+        String json = new ApiJsonCodec().toJson(payload);
         assertEquals("{\"value\":\"x\"}", json);
-        Payload parsed = GsonHelper.fromJson(json, Payload.class);
+        Payload parsed = new ApiJsonCodec().fromJson(json, Payload.class);
         assertEquals("x", parsed.value);
     }
 
     /** Empty and whitespace bodies deserialize to null instead of throwing. */
     @Test
     public void emptyBodyDeserializesToNull() {
-        assertNull(GsonHelper.fromJson("", Payload.class));
-        assertNull(GsonHelper.fromJson("   ", Payload.class));
+        assertNull(new ApiJsonCodec().fromJson("", Payload.class));
+        assertNull(new ApiJsonCodec().fromJson("   ", Payload.class));
     }
 }

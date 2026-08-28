@@ -13,7 +13,6 @@
 package org.openhab.binding.eightsleep.internal.sync;
 
 import static org.openhab.binding.eightsleep.internal.EightSleepBindingConstants.*;
-import static org.openhab.binding.eightsleep.internal.sync.SyncChannels.*;
 
 import java.time.Instant;
 
@@ -51,26 +50,25 @@ final class DeviceChannelMapper {
         collector.targetLevelAbsent = targetLevel == null;
 
         if (heatingLevel != null) {
-            add(collector, GROUP_DEVICE, CHANNEL_HEATING_LEVEL, new DecimalType(heatingLevel));
+            collector.add(GROUP_DEVICE, CHANNEL_HEATING_LEVEL, new DecimalType(heatingLevel));
         }
         if (targetLevel != null) {
-            double shownLevel = BedSideChannelSync.resolveShownTargetLevel(targetLevel, nowHeating,
-                    lastKnownTargetLevel);
+            double shownLevel = resolveShownTargetLevel(targetLevel, nowHeating, lastKnownTargetLevel);
             collector.lastKnownTargetLevel = shownLevel;
-            addTemperature(collector, GROUP_CURRENT, CHANNEL_TARGET_TEMPERATURE, shownLevel, fahrenheit);
+            collector.addTemperature(GROUP_CURRENT, CHANNEL_TARGET_TEMPERATURE, shownLevel, fahrenheit);
         } else {
-            Double autopilot = BedSideChannelSync.autopilotTargetLevel(userData.temperature());
+            Double autopilot = autopilotTargetLevel(userData.temperature());
             if (autopilot != null) {
-                addTemperature(collector, GROUP_CURRENT, CHANNEL_TARGET_TEMPERATURE, autopilot, fahrenheit);
+                collector.addTemperature(GROUP_CURRENT, CHANNEL_TARGET_TEMPERATURE, autopilot, fahrenheit);
             }
         }
         Integer remaining = state.heatingDuration(side);
         if (remaining != null) {
-            add(collector, GROUP_DEVICE, CHANNEL_REMAINING_TIME, new QuantityType<>(remaining, Units.SECOND));
+            collector.add(GROUP_DEVICE, CHANNEL_REMAINING_TIME, new QuantityType<>(remaining, Units.SECOND));
         }
         if (nowHeating != null && targetLevel != null) {
-            add(collector, GROUP_DEVICE, CHANNEL_HEATING_STATE,
-                    new StringType(BedSideChannelSync.deriveHeatingState(nowHeating, targetLevel)));
+            collector.add(GROUP_DEVICE, CHANNEL_HEATING_STATE,
+                    new StringType(deriveHeatingState(nowHeating, targetLevel)));
         }
 
         publishHubState(state, collector);
@@ -81,20 +79,20 @@ final class DeviceChannelMapper {
 
     private static void publishHubState(DeviceState state, SyncCollector collector) {
         if (state.ledBrightnessLevel() != null) {
-            add(collector, GROUP_DEVICE, CHANNEL_LED_BRIGHTNESS,
+            collector.add(GROUP_DEVICE, CHANNEL_LED_BRIGHTNESS,
                     new DecimalType(state.ledBrightnessLevel().doubleValue()));
         }
         if (state.hasWater() != null) {
-            add(collector, GROUP_DEVICE, CHANNEL_HAS_WATER, OnOffType.from(state.hasWater()));
+            collector.add(GROUP_DEVICE, CHANNEL_HAS_WATER, OnOffType.from(state.hasWater()));
         }
         if (state.needsPriming() != null) {
-            add(collector, GROUP_DEVICE, CHANNEL_NEEDS_PRIMING, OnOffType.from(state.needsPriming()));
+            collector.add(GROUP_DEVICE, CHANNEL_NEEDS_PRIMING, OnOffType.from(state.needsPriming()));
         }
         if (state.priming() != null) {
-            add(collector, GROUP_DEVICE, CHANNEL_IS_PRIMING, OnOffType.from(state.priming()));
+            collector.add(GROUP_DEVICE, CHANNEL_IS_PRIMING, OnOffType.from(state.priming()));
         }
         if (state.lastPrime() != null) {
-            add(collector, GROUP_DEVICE, CHANNEL_LAST_PRIME, new DateTimeType(state.lastPrime()));
+            collector.add(GROUP_DEVICE, CHANNEL_LAST_PRIME, new DateTimeType(state.lastPrime()));
         }
     }
 
@@ -102,11 +100,11 @@ final class DeviceChannelMapper {
             SyncCollector collector) {
         boolean known = userData.awayPolledAt().isAfter(Instant.EPOCH) || command != null;
         if (!known) {
-            add(collector, GROUP_DEVICE, CHANNEL_AWAY_MODE, UnDefType.UNDEF);
+            collector.add(GROUP_DEVICE, CHANNEL_AWAY_MODE, UnDefType.UNDEF);
             return;
         }
         Boolean resolved = LastWriteWins.resolveLatest(userData.awayObserved(), userData.awayPolledAt(), command);
-        add(collector, GROUP_DEVICE, CHANNEL_AWAY_MODE, OnOffType.from(Boolean.TRUE.equals(resolved)));
+        collector.add(GROUP_DEVICE, CHANNEL_AWAY_MODE, OnOffType.from(Boolean.TRUE.equals(resolved)));
         if (command != null && LastWriteWins.shouldRetireCommand(userData.awayObserved(), resolved)) {
             collector.retireAwayModeCommand = true;
         }
@@ -124,8 +122,25 @@ final class DeviceChannelMapper {
         }
         Boolean resolved = LastWriteWins.resolveLatest(polledOn, userData.temperatureAt(), command);
         if (resolved != null) {
-            add(collector, GROUP_DEVICE, CHANNEL_SIDE_POWER, OnOffType.from(resolved));
+            collector.add(GROUP_DEVICE, CHANNEL_SIDE_POWER, OnOffType.from(resolved));
             collector.retireSidePowerCommand = LastWriteWins.shouldRetireCommand(polledOn, resolved);
         }
+    }
+
+    private static double resolveShownTargetLevel(double targetLevelRaw, @Nullable Boolean nowHeating,
+            @Nullable Double previousShown) {
+        boolean meaningful = targetLevelRaw != 0 || Boolean.TRUE.equals(nowHeating);
+        return meaningful || previousShown == null ? targetLevelRaw : previousShown;
+    }
+
+    private static String deriveHeatingState(boolean nowHeating, double targetLevelRaw) {
+        if (!nowHeating || targetLevelRaw == 0) {
+            return "idle";
+        }
+        return targetLevelRaw > 0 ? "heating" : "cooling";
+    }
+
+    private static @Nullable Double autopilotTargetLevel(@Nullable TemperatureState temperature) {
+        return temperature != null ? temperature.smartLevel("bedTimeLevel") : null;
     }
 }

@@ -34,53 +34,56 @@ public final class ApiTestFixtures {
     }
 
     public static DeviceState parseDeviceData(String body) {
-        ApiResponses.DeviceEnvelope envelope = GsonHelper.fromJson(body, ApiResponses.DeviceEnvelope.class);
+        ApiResponses.DeviceEnvelope envelope = new ApiJsonCodec().fromJson(body, ApiResponses.DeviceEnvelope.class);
         return EightSleepApiMapper.toDeviceState(envelope != null ? envelope.result : null);
     }
 
     public static UserProfile parseUserProfile(String userId, String body) {
         return EightSleepApiMapper.toUserProfile(userId,
-                GsonHelper.fromJson(body, ApiResponses.UserProfileEnvelope.class));
+                new ApiJsonCodec().fromJson(body, ApiResponses.UserProfileEnvelope.class));
     }
 
     public static DeviceAssignments parseUserIdsForDevice(String body) {
-        ApiResponses.DeviceUsersEnvelope envelope = GsonHelper.fromJson(body, ApiResponses.DeviceUsersEnvelope.class);
+        ApiResponses.DeviceUsersEnvelope envelope = new ApiJsonCodec().fromJson(body,
+                ApiResponses.DeviceUsersEnvelope.class);
         return EightSleepApiMapper.toDeviceAssignments(envelope != null ? envelope.result : null);
     }
 
     public static String parseCurrentUserId(String body) {
-        return EightSleepApiMapper.toCurrentUserId(GsonHelper.fromJson(body, ApiResponses.MeEnvelope.class));
+        return EightSleepApiMapper.toCurrentUserId(new ApiJsonCodec().fromJson(body, ApiResponses.MeEnvelope.class));
     }
 
     public static Map<String, String> parseHouseholdDevices(String body) {
-        return EightSleepApiMapper.toHouseholdDevices(GsonHelper.fromJson(body, ApiResponses.HouseholdSummary.class));
+        return EightSleepApiMapper
+                .toHouseholdDevices(new ApiJsonCodec().fromJson(body, ApiResponses.HouseholdSummary.class));
     }
 
     public static TrendData parseTrendDays(String body) {
-        return EightSleepApiMapper.toTrendData(GsonHelper.fromJson(body, ApiResponses.Trends.class));
+        return EightSleepApiMapper.toTrendData(new ApiJsonCodec().fromJson(body, ApiResponses.Trends.class));
     }
 
     public static List<Alarm> parseAlarms(String body) {
-        return EightSleepApiMapper.toAlarms(GsonHelper.fromJson(body, ApiResponses.Alarms.class));
+        return EightSleepApiMapper.toAlarms(new ApiJsonCodec().fromJson(body, ApiResponses.Alarms.class));
     }
 
     public static BaseState parseBaseData(String body) {
-        return EightSleepApiMapper.toBaseState(GsonHelper.fromJson(body, ApiResponses.Base.class));
+        return EightSleepApiMapper.toBaseState(new ApiJsonCodec().fromJson(body, ApiResponses.Base.class));
     }
 
     public static PlayerState parsePlayerState(String body) {
-        return EightSleepApiMapper.toPlayerState(GsonHelper.fromJson(body, ApiResponses.Player.class));
+        return EightSleepApiMapper.toPlayerState(new ApiJsonCodec().fromJson(body, ApiResponses.Player.class));
     }
 
     public static TemperatureState parseTemperature(String body) {
-        return EightSleepApiMapper.toTemperatureState(GsonHelper.fromJson(body, ApiResponses.Temperature.class));
+        return EightSleepApiMapper
+                .toTemperatureState(new ApiJsonCodec().fromJson(body, ApiResponses.Temperature.class));
     }
 
     public static PillowState parsePillowData(String body) {
-        return EightSleepApiMapper.toPillowState(GsonHelper.fromJson(body, ApiResponses.TemperatureAll.class));
+        return EightSleepApiMapper.toPillowState(new ApiJsonCodec().fromJson(body, ApiResponses.TemperatureAll.class));
     }
 
     public static String buildAlarmUpdateBody(Alarm alarm, @Nullable Boolean enabled, @Nullable String timeOverride) {
-        return GsonHelper.toJson(EightSleepApiMapper.toAlarmUpdate(alarm, enabled, timeOverride));
+        return new ApiJsonCodec().toJson(EightSleepApiMapper.toAlarmUpdate(alarm, enabled, timeOverride));
     }
 }

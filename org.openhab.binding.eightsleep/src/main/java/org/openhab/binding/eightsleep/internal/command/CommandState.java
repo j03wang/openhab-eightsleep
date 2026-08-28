@@ -12,7 +12,7 @@
  */
 package org.openhab.binding.eightsleep.internal.command;
 
-import java.time.Instant;
+import java.time.Clock;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
@@ -27,9 +27,19 @@ import org.openhab.binding.eightsleep.internal.sync.LastWriteWins.CommandedValue
 @NonNullByDefault
 public final class CommandState {
 
+    private final Clock clock;
     private final ConcurrentHashMap<String, CommandedValue> channels = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, CommandedValue> alarms = new ConcurrentHashMap<>();
     private volatile @Nullable Double lastKnownTargetLevel;
+
+    /**
+     * Creates command state using the supplied clock.
+     *
+     * @param clock the clock used to timestamp commands
+     */
+    public CommandState(Clock clock) {
+        this.clock = clock;
+    }
 
     /**
      * Records a boolean channel command at the current instant.
@@ -38,7 +48,7 @@ public final class CommandState {
      * @param value the commanded value
      */
     public void recordChannel(String channelId, boolean value) {
-        channels.put(channelId, new CommandedValue(Instant.now(), value));
+        channels.put(channelId, new CommandedValue(clock.instant(), value));
     }
 
     /**
@@ -67,7 +77,7 @@ public final class CommandState {
      * @param enabled the commanded state
      */
     public void recordAlarm(String alarmId, boolean enabled) {
-        alarms.put(alarmId, new CommandedValue(Instant.now(), enabled));
+        alarms.put(alarmId, new CommandedValue(clock.instant(), enabled));
     }
 
     /**

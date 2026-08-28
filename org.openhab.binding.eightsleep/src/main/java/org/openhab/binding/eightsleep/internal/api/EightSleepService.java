@@ -515,23 +515,6 @@ public class EightSleepService {
         return CompletableFuture.failedFuture(new ApiException(message));
     }
 
-    /**
-     * Waits for an asynchronous service operation and exposes its cause as an API exception.
-     *
-     * @param future the operation to await
-     * @param <T> the operation result type
-     * @return the completed operation result
-     * @throws ApiException if the operation completes exceptionally
-     */
-    public static <T> T join(CompletableFuture<T> future) throws ApiException {
-        try {
-            return future.join();
-        } catch (RuntimeException e) {
-            Throwable cause = e.getCause() != null ? e.getCause() : e;
-            throw new ApiException(cause.getMessage(), cause);
-        }
-    }
-
     private static int clampHeatingLevel(int level) {
         return Math.max(HEATING_LEVEL_MIN, Math.min(HEATING_LEVEL_MAX, level));
     }

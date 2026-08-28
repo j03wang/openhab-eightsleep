@@ -13,7 +13,6 @@
 package org.openhab.binding.eightsleep.internal.sync;
 
 import static org.openhab.binding.eightsleep.internal.EightSleepBindingConstants.*;
-import static org.openhab.binding.eightsleep.internal.sync.SyncChannels.*;
 
 import java.time.Instant;
 
@@ -45,9 +44,9 @@ final class SleepChannelMapper {
             publishPrevious(trends.getDay(1), collector);
         }
         if (measuredBedC != null) {
-            add(collector, GROUP_CURRENT, CHANNEL_BED_TEMPERATURE, new QuantityType<>(measuredBedC, SIUnits.CELSIUS));
+            collector.add(GROUP_CURRENT, CHANNEL_BED_TEMPERATURE, new QuantityType<>(measuredBedC, SIUnits.CELSIUS));
         } else if (heatingLevel != null) {
-            addTemperature(collector, GROUP_CURRENT, CHANNEL_BED_TEMPERATURE, heatingLevel, fahrenheit);
+            collector.addTemperature(GROUP_CURRENT, CHANNEL_BED_TEMPERATURE, heatingLevel, fahrenheit);
         }
     }
 
@@ -55,10 +54,10 @@ final class SleepChannelMapper {
             SyncCollector collector) {
         if (day != null) {
             if (day.presenceStart() != null) {
-                add(collector, GROUP_CURRENT, CHANNEL_SESSION_START, new DateTimeType(day.presenceStart()));
+                collector.add(GROUP_CURRENT, CHANNEL_SESSION_START, new DateTimeType(day.presenceStart()));
             }
             if (day.presenceEnd() != null) {
-                add(collector, GROUP_CURRENT, CHANNEL_SESSION_END, new DateTimeType(day.presenceEnd()));
+                collector.add(GROUP_CURRENT, CHANNEL_SESSION_END, new DateTimeType(day.presenceEnd()));
             }
             putDecimal(collector, GROUP_CURRENT, CHANNEL_SLEEP_SCORE, day.score());
             TrendData.Score quality = day.sleepQualityScore();
@@ -71,16 +70,16 @@ final class SleepChannelMapper {
             putDecimal(collector, GROUP_LAST_SLEEP, CHANNEL_TOSS_TURNS, day.tossAndTurns());
         }
         if (session == null) {
-            add(collector, GROUP_BASE, CHANNEL_BED_PRESENCE, OnOffType.OFF);
+            collector.add(GROUP_BASE, CHANNEL_BED_PRESENCE, OnOffType.OFF);
             return;
         }
         putLatestCelsius(collector, session, "tempRoomC", GROUP_DEVICE, CHANNEL_ROOM_TEMPERATURE);
         putLatest(collector, session, "heartRate", GROUP_CURRENT, CHANNEL_HEART_RATE);
         putLatest(collector, session, "respiratoryRate", GROUP_CURRENT, CHANNEL_RESPIRATORY_RATE);
-        add(collector, GROUP_BASE, CHANNEL_BED_PRESENCE, OnOffType.from(SleepSession.isPresent(session, now)));
+        collector.add(GROUP_BASE, CHANNEL_BED_PRESENCE, OnOffType.from(SleepSession.isPresent(session, now)));
         String stage = SleepSession.currentStage(session, now);
         if (stage != null) {
-            add(collector, GROUP_CURRENT, CHANNEL_SLEEP_STAGE, new StringType(stage));
+            collector.add(GROUP_CURRENT, CHANNEL_SLEEP_STAGE, new StringType(stage));
         }
     }
 
@@ -108,16 +107,16 @@ final class SleepChannelMapper {
             putDuration(collector, GROUP_LAST_SLEEP, CHANNEL_AWAKE_DURATION, presence - sleep);
         }
         if (day.presenceStart() != null) {
-            add(collector, GROUP_LAST_SLEEP, CHANNEL_SESSION_START, new DateTimeType(day.presenceStart()));
+            collector.add(GROUP_LAST_SLEEP, CHANNEL_SESSION_START, new DateTimeType(day.presenceStart()));
         }
         if (day.presenceEnd() != null) {
-            add(collector, GROUP_LAST_SLEEP, CHANNEL_SESSION_END, new DateTimeType(day.presenceEnd()));
+            collector.add(GROUP_LAST_SLEEP, CHANNEL_SESSION_END, new DateTimeType(day.presenceEnd()));
         }
     }
 
     private static void putDecimal(SyncCollector collector, String group, String channel, @Nullable Double value) {
         if (value != null) {
-            add(collector, group, channel, new DecimalType(value));
+            collector.add(group, channel, new DecimalType(value));
         }
     }
 
@@ -130,13 +129,13 @@ final class SleepChannelMapper {
             String group, String channel) {
         Double value = session.latestValue(series);
         if (value != null) {
-            add(collector, group, channel, new QuantityType<>(value, SIUnits.CELSIUS));
+            collector.add(group, channel, new QuantityType<>(value, SIUnits.CELSIUS));
         }
     }
 
     private static void putDuration(SyncCollector collector, String group, String channel, @Nullable Double seconds) {
         if (seconds != null && seconds >= 0) {
-            add(collector, group, channel, new QuantityType<>(seconds, Units.SECOND));
+            collector.add(group, channel, new QuantityType<>(seconds, Units.SECOND));
         }
     }
 }

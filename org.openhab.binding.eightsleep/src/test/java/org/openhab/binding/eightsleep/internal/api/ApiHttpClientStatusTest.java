@@ -39,6 +39,8 @@ import com.sun.net.httpserver.HttpServer;
 @NonNullByDefault
 public class ApiHttpClientStatusTest {
 
+    private final ApiHttpClient client = new ApiHttpClient();
+
     private final List<String> seenAuthorization = new CopyOnWriteArrayList<>();
 
     private @Nullable HttpServer server;
@@ -87,7 +89,7 @@ public class ApiHttpClientStatusTest {
     @Test
     public void successPassesBodyThrough() throws Exception {
         String url = startServer(200, "{\"ok\":true}");
-        assertEquals("{\"ok\":true}", ApiHttpClient.send("GET", url, null, null).get(5, TimeUnit.SECONDS));
+        assertEquals("{\"ok\":true}", client.send("GET", url, null, null).get(5, TimeUnit.SECONDS));
     }
 
     /** The DELETE branch of the send switch must reach the wire without a body. */
@@ -103,7 +105,7 @@ public class ApiHttpClientStatusTest {
         s.start();
         try {
             String url = "http://localhost:" + s.getAddress().getPort() + "/v1/test";
-            assertEquals("", ApiHttpClient.send("DELETE", url, null, "tok").get(5, TimeUnit.SECONDS));
+            assertEquals("", client.send("DELETE", url, null, "tok").get(5, TimeUnit.SECONDS));
             assertEquals(List.of("DELETE"), seenMethods);
         } finally {
             s.stop(0);
@@ -114,11 +116,11 @@ public class ApiHttpClientStatusTest {
     @Test
     public void bearerHeaderForwardedWhenTokenPresent() throws Exception {
         String url = startServer(200, "");
-        ApiHttpClient.send("GET", url, null, "tok123").get(5, TimeUnit.SECONDS);
+        client.send("GET", url, null, "tok123").get(5, TimeUnit.SECONDS);
         assertEquals(List.of("Bearer tok123"), seenAuthorization);
 
         seenAuthorization.clear();
-        ApiHttpClient.send("GET", url, null, null).get(5, TimeUnit.SECONDS);
+        client.send("GET", url, null, null).get(5, TimeUnit.SECONDS);
         assertEquals("no token -> no Authorization header", java.util.Arrays.asList(new String[] { null }),
                 seenAuthorization);
     }
@@ -126,7 +128,7 @@ public class ApiHttpClientStatusTest {
     @Test
     public void unauthorizedFlagSetFor401() throws Exception {
         String url = startServer(401, "{\"error\":\"token expired\"}");
-        ApiException e = failureOf(ApiHttpClient.send("GET", url, null, "tok"));
+        ApiException e = failureOf(client.send("GET", url, null, "tok"));
         assertTrue(e.isUnauthorized());
         assertFalse(e.isSubscriptionRequired());
     }
@@ -136,7 +138,7 @@ public class ApiHttpClientStatusTest {
         for (String body : new String[] { "Subscription required", "SUBSCRIPTION REQUIRED",
                 "an active subscription is needed" }) {
             String url = startServer(403, body);
-            ApiException e = failureOf(ApiHttpClient.send("GET", url, null, "tok"));
+            ApiException e = failureOf(client.send("GET", url, null, "tok"));
             assertTrue(e.isSubscriptionRequired());
             assertFalse(e.isUnauthorized());
         }
@@ -145,7 +147,7 @@ public class ApiHttpClientStatusTest {
     @Test
     public void forbiddenWithoutSubscriptionWordIsPlainError() throws Exception {
         String url = startServer(403, "{\"error\":\"forbidden\"}");
-        ApiException e = failureOf(ApiHttpClient.send("GET", url, null, "tok"));
+        ApiException e = failureOf(client.send("GET", url, null, "tok"));
         assertFalse(e.isUnauthorized());
         assertFalse(e.isSubscriptionRequired());
     }
@@ -153,7 +155,7 @@ public class ApiHttpClientStatusTest {
     @Test
     public void serverErrorCarriesNoFlags() throws Exception {
         String url = startServer(500, "boom");
-        ApiException e = failureOf(ApiHttpClient.send("GET", url, null, "tok"));
+        ApiException e = failureOf(client.send("GET", url, null, "tok"));
         assertFalse(e.isUnauthorized());
         assertFalse(e.isSubscriptionRequired());
         assertTrue(e.getMessage().contains("HTTP 500"));
@@ -164,7 +166,7 @@ public class ApiHttpClientStatusTest {
     public void largeErrorBodyTruncatedInMessage() throws Exception {
         String big = "x".repeat(2000);
         String url = startServer(503, big);
-        ApiException e = failureOf(ApiHttpClient.send("GET", url, null, "tok"));
+        ApiException e = failureOf(client.send("GET", url, null, "tok"));
         assertFalse(e.getMessage().contains(big));
         assertTrue(e.getMessage().endsWith("..."));
     }

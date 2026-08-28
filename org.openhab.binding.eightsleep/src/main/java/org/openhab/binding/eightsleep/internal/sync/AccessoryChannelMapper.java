@@ -13,13 +13,12 @@
 package org.openhab.binding.eightsleep.internal.sync;
 
 import static org.openhab.binding.eightsleep.internal.EightSleepBindingConstants.*;
-import static org.openhab.binding.eightsleep.internal.sync.SyncChannels.*;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 import org.openhab.binding.eightsleep.internal.model.BaseState;
 import org.openhab.binding.eightsleep.internal.model.BedSide;
-import org.openhab.binding.eightsleep.internal.model.PillowEntry;
+import org.openhab.binding.eightsleep.internal.model.PillowState.PillowEntry;
 import org.openhab.binding.eightsleep.internal.polling.UserDataSnapshot;
 import org.openhab.core.library.types.DecimalType;
 import org.openhab.core.library.types.OnOffType;
@@ -40,10 +39,10 @@ final class AccessoryChannelMapper {
         if (pillow != null) {
             Integer level = pillow.level();
             if (level != null) {
-                addTemperature(collector, GROUP_PILLOW, CHANNEL_PILLOW_TARGET_TEMPERATURE, level, fahrenheit);
-                add(collector, GROUP_PILLOW, CHANNEL_PILLOW_HEATING_LEVEL, new DecimalType(level));
+                collector.addTemperature(GROUP_PILLOW, CHANNEL_PILLOW_TARGET_TEMPERATURE, level, fahrenheit);
+                collector.add(GROUP_PILLOW, CHANNEL_PILLOW_HEATING_LEVEL, new DecimalType(level));
             }
-            add(collector, GROUP_PILLOW, CHANNEL_PILLOW_POWER, OnOffType.from(pillow.isOn()));
+            collector.add(GROUP_PILLOW, CHANNEL_PILLOW_POWER, OnOffType.from(pillow.isOn()));
         }
     }
 
@@ -52,16 +51,16 @@ final class AccessoryChannelMapper {
             return;
         }
         if (state.presetName() != null) {
-            add(collector, GROUP_BASE, CHANNEL_BASE_PRESET, new StringType(state.presetName()));
+            collector.add(GROUP_BASE, CHANNEL_BASE_PRESET, new StringType(state.presetName()));
         }
         if (state.torsoAngle() != null) {
-            add(collector, GROUP_BASE, CHANNEL_HEAD_ANGLE, new QuantityType<>(state.torsoAngle(), Units.DEGREE_ANGLE));
+            collector.add(GROUP_BASE, CHANNEL_HEAD_ANGLE, new QuantityType<>(state.torsoAngle(), Units.DEGREE_ANGLE));
         }
         if (state.legAngle() != null) {
-            add(collector, GROUP_BASE, CHANNEL_FEET_ANGLE, new QuantityType<>(state.legAngle(), Units.DEGREE_ANGLE));
+            collector.add(GROUP_BASE, CHANNEL_FEET_ANGLE, new QuantityType<>(state.legAngle(), Units.DEGREE_ANGLE));
         }
         if (state.inSnoreMitigation() != null) {
-            add(collector, GROUP_BASE, CHANNEL_SNORE_MITIGATION, OnOffType.from(state.inSnoreMitigation()));
+            collector.add(GROUP_BASE, CHANNEL_SNORE_MITIGATION, OnOffType.from(state.inSnoreMitigation()));
         }
     }
 }

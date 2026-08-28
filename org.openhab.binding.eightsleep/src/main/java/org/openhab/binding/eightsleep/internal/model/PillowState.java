@@ -56,4 +56,27 @@ public record PillowState(List<PillowEntry> devices) {
     public boolean containsPod(String deviceId) {
         return devices.stream().anyMatch(entry -> entry.isPod() && deviceId.equals(entry.deviceId()));
     }
+
+    /**
+     * One temperature-controlled device in a temperature-all response.
+     */
+    public record PillowEntry(@Nullable String specialization, @Nullable BedSide side, @Nullable String deviceId,
+            @Nullable Double currentLevel, @Nullable String stateType) {
+
+        public boolean isPillow() {
+            return "pillow".equals(specialization);
+        }
+
+        public boolean isPod() {
+            return "pod".equals(specialization);
+        }
+
+        public boolean isOn() {
+            return stateType != null && !"off".equalsIgnoreCase(stateType);
+        }
+
+        public @Nullable Integer level() {
+            return currentLevel != null ? (int) Math.round(currentLevel) : null;
+        }
+    }
 }

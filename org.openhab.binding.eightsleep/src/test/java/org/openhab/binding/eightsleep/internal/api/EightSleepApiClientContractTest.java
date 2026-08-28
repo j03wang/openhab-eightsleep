@@ -16,6 +16,7 @@ import static org.junit.Assert.assertEquals;
 
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.junit.Test;
@@ -43,5 +44,21 @@ public class EightSleepApiClientContractTest {
         ApiResponses.Device result = Objects.requireNonNull(response.result);
         assertEquals(Double.valueOf(-12), result.leftHeatingLevel);
         assertEquals("cooling", Objects.requireNonNull(result.features).get(0));
+    }
+
+    @Test
+    public void deviceIdentifierIsEncodedInRequestUrl() {
+        TokenManager tokenManager = new TokenManager("me@example.com", "password", null, null,
+                (clientId, clientSecret, username, password) -> CompletableFuture
+                        .completedFuture("{\"access_token\":\"token\",\"expires_in\":3600}"));
+        AtomicReference<String> requestedUrl = new AtomicReference<>();
+        EightSleepApiClient client = new EightSleepApiClient(tokenManager, (method, url, body, token) -> {
+            requestedUrl.set(url);
+            return CompletableFuture.completedFuture("{\"result\":{}}");
+        });
+
+        client.getDevice("pod /+é").join();
+
+        assertEquals(ApiConstants.CLIENT_API_URL + "/devices/pod+%2F%2B%C3%A9", requestedUrl.get());
     }
 }

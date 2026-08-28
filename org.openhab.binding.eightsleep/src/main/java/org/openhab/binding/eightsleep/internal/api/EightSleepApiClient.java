@@ -12,8 +12,8 @@
  */
 package org.openhab.binding.eightsleep.internal.api;
 
-import static org.openhab.binding.eightsleep.internal.api.ApiHttpClient.urlEncode;
-
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
@@ -46,8 +46,7 @@ public class EightSleepApiClient {
     private static final Logger LOGGER = LoggerFactory.getLogger(EightSleepApiClient.class);
 
     /**
-     * Seam for tests: performs an authorized HTTP call. Production delegates to
-     * {@link ApiHttpClient}; tests record URLs/bodies and return canned responses.
+     * Transport port for authorized API requests.
      */
     public interface Transport {
         /**
@@ -80,6 +79,7 @@ public class EightSleepApiClient {
 
     private final TokenManager tokenManager;
     private final Transport transport;
+    private final ApiJsonCodec jsonCodec;
 
     /**
      * Creates a client using the production HTTP transport.
@@ -87,7 +87,7 @@ public class EightSleepApiClient {
      * @param tokenManager the OAuth token manager
      */
     public EightSleepApiClient(TokenManager tokenManager) {
-        this(tokenManager, ApiHttpClient::send);
+        this(tokenManager, new ApiHttpClient(), new ApiJsonCodec());
     }
 
     /**
@@ -97,8 +97,20 @@ public class EightSleepApiClient {
      * @param transport the transport used to send requests
      */
     public EightSleepApiClient(TokenManager tokenManager, Transport transport) {
+        this(tokenManager, transport, new ApiJsonCodec());
+    }
+
+    /**
+     * Creates a client from injectable authentication, transport, and JSON dependencies.
+     *
+     * @param tokenManager the OAuth token manager
+     * @param transport the transport used to send requests
+     * @param jsonCodec the API JSON codec
+     */
+    public EightSleepApiClient(TokenManager tokenManager, Transport transport, ApiJsonCodec jsonCodec) {
         this.tokenManager = tokenManager;
         this.transport = transport;
+        this.jsonCodec = jsonCodec;
     }
 
     /**
@@ -494,7 +506,7 @@ public class EightSleepApiClient {
 
     private <T> CompletableFuture<T> get(String url, Class<T> responseType) {
         return withAuthRetry(token -> transport.send("GET", url, null, token))
-                .thenApply(body -> GsonHelper.fromJson(body, responseType));
+                .thenApply(body -> jsonCodec.fromJson(body, responseType));
     }
 
     private CompletableFuture<Void> clientPut(String path, ApiRequests.Request request) {
@@ -514,7 +526,7 @@ public class EightSleepApiClient {
     }
 
     private CompletableFuture<Void> send(String method, String url, ApiRequests.@Nullable Request request) {
-        String body = request != null ? GsonHelper.toJson(request) : null;
+        String body = request != null ? jsonCodec.toJson(request) : null;
         return withAuthRetry(token -> transport.send(method, url, body, token)).thenApply(ignored -> null);
     }
 
@@ -534,6 +546,7 @@ public class EightSleepApiClient {
             if (ex == null) {
                 return CompletableFuture.completedFuture(body);
             }
+
             Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
             if (cause instanceof ApiException apiEx && apiEx.isUnauthorized()) {
                 LOGGER.debug("401 received, refreshing token and retrying once");
@@ -552,5 +565,9 @@ public class EightSleepApiClient {
      */
     private CompletableFuture<String> supplyToken() {
         return tokenManager.getAccessTokenAsync();
+    }
+
+    private static String urlEncode(String value) {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
 }

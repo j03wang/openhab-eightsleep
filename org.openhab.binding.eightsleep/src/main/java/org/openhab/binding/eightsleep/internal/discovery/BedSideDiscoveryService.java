@@ -17,6 +17,7 @@ import static org.openhab.binding.eightsleep.internal.EightSleepBindingConstants
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Consumer;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
@@ -45,9 +46,15 @@ public class BedSideDiscoveryService extends AbstractDiscoveryService implements
     private static final int SEARCH_TIME_SECONDS = 10;
 
     private @Nullable AccountHandler accountHandler;
+    private final Consumer<DiscoveryResult> resultPublisher;
 
     public BedSideDiscoveryService() {
+        this(null);
+    }
+
+    BedSideDiscoveryService(@Nullable Consumer<DiscoveryResult> resultPublisher) {
         super(Set.of(THING_TYPE_UID_BED_SIDE), SEARCH_TIME_SECONDS, false);
+        this.resultPublisher = resultPublisher != null ? resultPublisher : this::thingDiscovered;
     }
 
     @Override
@@ -110,13 +117,12 @@ public class BedSideDiscoveryService extends AbstractDiscoveryService implements
         for (UserProfile profile : profiles) {
             DiscoveryResult result = buildDiscoveryResult(account.getThing().getUID(), deviceLabel, profile);
             if (result != null) {
-                thingDiscovered(result);
+                resultPublisher.accept(result);
             }
         }
     }
 
-    /** Visible for tests. */
-    static org.openhab.core.config.discovery.DiscoveryResult buildDiscoveryResult(ThingUID bridgeUID,
+    private static org.openhab.core.config.discovery.@Nullable DiscoveryResult buildDiscoveryResult(ThingUID bridgeUID,
             String deviceLabel, UserProfile profile) {
         String userId = profile.userId();
         if (userId == null) {
@@ -147,9 +153,8 @@ public class BedSideDiscoveryService extends AbstractDiscoveryService implements
     /**
      * Normalizes a raw bed side to "left"/"right"/"solo"; null/unknown sides
      * default to "left" like the upstream client.
-     * Visible for tests.
      */
-    static String normalizeSide(@Nullable String rawSide) {
+    private static String normalizeSide(@Nullable String rawSide) {
         if (rawSide == null || rawSide.isBlank()) {
             return "left";
         }
@@ -159,9 +164,8 @@ public class BedSideDiscoveryService extends AbstractDiscoveryService implements
 
     /**
      * Replaces characters that are illegal in a thing ID segment.
-     * Visible for tests.
      */
-    static String sanitizeForThingId(String userId) {
+    private static String sanitizeForThingId(String userId) {
         return userId.replaceAll("[^a-zA-Z0-9_-]", "_");
     }
 }

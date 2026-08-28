@@ -16,6 +16,7 @@ import java.util.List;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
+import org.openhab.core.types.State;
 
 /**
  * Immutable decisions produced by a bed-side synchronization cycle.
@@ -29,6 +30,12 @@ public record SyncResult(List<ChannelUpdate> updates, StatusAction statusAction,
 
     public SyncResult {
         updates = List.copyOf(updates);
+    }
+
+    /**
+     * One channel state produced by a synchronization cycle.
+     */
+    public record ChannelUpdate(String channelUid, State state) {
     }
 
     /**

@@ -23,10 +23,11 @@ AccountHandler       BedSideHandler     BedSideDiscoveryService
  └─► EightSleepService ◄───────────────────────── BedSideCommands
                         │
               EightSleepApiClient
-                        │
-             TokenManager (OAuth session)
-                        │
-                ApiHttpClient (JDK HttpClient)
+                   │          │
+          TokenManager     ApiJsonCodec
+          (OAuth session)       │
+                   └──── ApiHttpClient
+                        (JDK HttpClient)
                         │
               Eight Sleep cloud APIs
 ```
@@ -50,8 +51,8 @@ Flows: AccountPoller polls via the service and writes observations into UserData
 | Package | Responsibility |
 |---|---|
 | `internal.handler` | Thin openHAB lifecycle adapters (`AccountHandler` bridge and `BedSideHandler` thing) |
-| `internal.config` | Thing configuration DTOs and account configuration parsing |
-| `internal.command` | Bed-side command dispatch, command execution context and pending command state |
+| `internal.config` | Thing configuration DTOs, including normalization and polling bounds |
+| `internal.command` | Stateful bed-side command dispatch, command execution context and pending command state |
 | `internal.api` | Domain-facing orchestration and mapping (`EightSleepService`, `EightSleepApiMapper`), contract-only endpoint client (`EightSleepApiClient`), API scalar parsing, HTTP transport, OAuth session and typed exceptions |
 | `internal.api.dto` | Request and response contracts matching the API's JSON payloads |
 | `internal.polling` | Poll scheduling (`AccountPollingCoordinator`), per-user fan-out, mutable caches, immutable snapshots and freshness policy |
@@ -68,6 +69,7 @@ Flows: AccountPoller polls via the service and writes observations into UserData
 - `TokenManager` keeps one OAuth token per account bridge, refreshing proactively 120 s before expiry.
 - Token acquisition is **non-blocking**: `getAccessTokenAsync()` composes the refresh; concurrent callers share a single in-flight refresh. The blocking `getAccessToken()` remains only for off-scheduler callers.
 - On HTTP 401 the client invalidates the token and retries **exactly once** (`withAuthRetry`). Subscription-gated endpoints are detected via structured flags on `ApiException` (`isUnauthorized()`, `isSubscriptionRequired()`).
+- API infrastructure is instance-scoped: `ApiHttpClient` implements both API and authentication transport ports, while an injected `ApiJsonCodec` handles wire serialization for the client and token manager. No global HTTP client or JSON singleton is used.
 - Reconnects build **new** `TokenManager`/`EightSleepService`/`EightSleepApiClient` instances; `AccountPollingCoordinator` replaces its poller and invalidates callbacks from the obsolete session.
 
 ### 4.2 Polling model
@@ -88,7 +90,7 @@ Flows: AccountPoller polls via the service and writes observations into UserData
 
 All mutable channels — side power, alarms, temperature targets and away mode — resolve through one mechanism: `BedSideChannelSync.compute()` compares the cached polled observation against a pending command stamp via `LastWriteWins.resolveLatest`. Each observation carries a timestamp (polls stamp their *start*, commands their issue time); the more recent one wins, with ties going to the polled value. Caches hold raw observations; sync is the sole adjudicator.
 
-- `BedSideCommandDispatcher` keeps channel routing explicit; `BedSideCommands` executes operations using a context of explicit values rather than depending on either handler.
+- `BedSideCommands` owns the single dispatch entry point and executes operations using a context of explicit values rather than depending on either handler. Its injected clock makes alarm selection deterministic.
 - Optimistic feedback: side power, alarms and away mode write timestamped stamps into `CommandState` before/as the request goes out, so reconciliation sees the command even if the HTTP round trip is still in flight.
 - Server confirmations retire the corresponding stamps (`retireSidePowerCommand`, `retireAwayModeCommand`, `retireAlarmId`) so pending stamps do not accumulate.
 - Away mode stays `UNDEF` until *this user* has spoken (polled or commanded) — the gate is derived from the cache entry and pending stamp, never global.
@@ -99,9 +101,15 @@ All mutable channels — side power, alarms, temperature targets and away mode �
 
 - Unit-testable without framework objects.
 - Deterministic status decisions in one place: `BRIDGE_OFFLINE`, `USER_NOT_FOUND`, `STALE_DATA`, `ONLINE`, `NONE`.
-- Heating-level quirks isolated (`resolveShownTargetLevel`, absent-target detection).
+- Heating-level quirks stay private to the focused device projector; tests assert the resulting `SyncResult` rather than helper methods.
 
-### 4.6 Error handling & degradation
+### 4.6 Composition and dependency injection
+
+- `EightSleepHandlerFactory` is the production composition root. It creates the shared JSON codec, JDK HTTP transport, clock, command dispatcher and channel synchronizer, and supplies connection-scoped token managers, API clients and domain services to account handlers.
+- `BedSideHandler` receives its clock, `BedSideCommands` and `BedSideChannelSync` collaborators from the handler factory.
+- Discovery tests observe published `DiscoveryResult` values through a publisher seam; thing-ID sanitization and side normalization remain private implementation details.
+
+### 4.7 Error handling & degradation
 
 - The API client accepts request DTOs and returns response DTOs. The service owns validation, clamping and multi-call orchestration; `EightSleepApiMapper` converts DTOs into immutable domain records. No substring matching on bodies except the unavoidable 403 "subscription" classifier.
 - Optional accessories degrade silently: speaker 404 → speaker-less state; missing pillow payload → no pillow channels; alarm 403 (no subscription) → empty list stamped fresh.

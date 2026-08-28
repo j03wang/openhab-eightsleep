@@ -26,7 +26,7 @@ import java.util.Map;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.junit.Test;
-import org.openhab.binding.eightsleep.internal.api.GsonHelper;
+import org.openhab.binding.eightsleep.internal.api.ApiJsonCodec;
 
 /**
  * Tests for the weekly roll-forward of stale alarm timestamps and DST handling
@@ -39,7 +39,7 @@ import org.openhab.binding.eightsleep.internal.api.GsonHelper;
 public class AlarmNextRunTest {
 
     private static Alarm alarmWithRepeat(String repeatJson) {
-        return alarm("07:30:00", GsonHelper.fromJson(repeatJson, Alarm.AlarmRepeat.class), null);
+        return alarm("07:30:00", new ApiJsonCodec().fromJson(repeatJson, Alarm.AlarmRepeat.class), null);
     }
 
     // ==================== rollToNextWeek ====================
@@ -149,7 +149,7 @@ public class AlarmNextRunTest {
     }
 
     private static Alarm alarmWithRetryAt(String time, String repeatJson) {
-        return alarm(time, GsonHelper.fromJson(repeatJson, Alarm.AlarmRepeat.class), null);
+        return alarm(time, new ApiJsonCodec().fromJson(repeatJson, Alarm.AlarmRepeat.class), null);
     }
 
     private static Alarm alarm(String time, Alarm.AlarmRepeat repeat, Instant nextRun) {

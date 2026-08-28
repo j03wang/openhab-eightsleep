@@ -12,10 +12,9 @@
  */
 package org.openhab.binding.eightsleep.internal.command;
 
-import static org.openhab.binding.eightsleep.internal.EightSleepBindingConstants.CHANNEL_AWAY_MODE;
-import static org.openhab.binding.eightsleep.internal.EightSleepBindingConstants.CHANNEL_SIDE_POWER;
-import static org.openhab.binding.eightsleep.internal.EightSleepBindingConstants.DEFAULT_SNOOZE_MINUTES;
+import static org.openhab.binding.eightsleep.internal.EightSleepBindingConstants.*;
 
+import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -29,56 +28,100 @@ import org.openhab.binding.eightsleep.internal.api.ApiValueParser;
 import org.openhab.binding.eightsleep.internal.api.EightSleepService;
 import org.openhab.binding.eightsleep.internal.model.Alarm;
 import org.openhab.binding.eightsleep.internal.model.BedSide;
-import org.openhab.binding.eightsleep.internal.model.PillowEntry;
 import org.openhab.binding.eightsleep.internal.model.PillowState;
+import org.openhab.binding.eightsleep.internal.model.PillowState.PillowEntry;
 import org.openhab.binding.eightsleep.internal.polling.UserDataSnapshot;
 import org.openhab.binding.eightsleep.internal.temperature.HeatingLevelConversion;
 import org.openhab.core.library.types.DecimalType;
 import org.openhab.core.library.types.OnOffType;
 import org.openhab.core.library.types.QuantityType;
 import org.openhab.core.library.unit.ImperialUnits;
+import org.openhab.core.thing.ChannelUID;
+import org.openhab.core.types.Command;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Command execution for one bed side: turns an openHAB command into API calls.
- * Extracted from BedSideHandler so the handler only dispatches; all Eight Sleep
- * specific command behavior lives here.
+ * Stateful command dispatcher for one bed side. It routes openHAB commands to
+ * API operations and uses an injected clock for deterministic alarm selection.
  *
  * @author Joe Wang - Initial contribution
  */
 @NonNullByDefault
 public final class BedSideCommands {
 
-    /** Max angles of the adjustable base sections. */
-    public static final int HEAD_ANGLE_MAX = 45;
-    public static final int FEET_ANGLE_MAX = 20;
+    private static final int HEAD_ANGLE_MAX = 45;
+    private static final int FEET_ANGLE_MAX = 20;
 
     /** Everything a command needs; built fresh per handleCommand invocation. */
-    public record Context(EightSleepService service, String userId, BedSide side, boolean fahrenheit,
+    public record Context(EightSleepService service, String userId, BedSide side, boolean fahrenheit, ZoneId zone,
             @Nullable String deviceId, @Nullable UserDataSnapshot userData, CommandState commandState,
             Runnable onApplied) {
     }
 
     private static final Logger LOGGER = LoggerFactory.getLogger(BedSideCommands.class);
+    private final Clock clock;
 
-    private BedSideCommands() {
-        throw new IllegalAccessError("Non-instantiable");
+    /**
+     * Creates a command dispatcher.
+     *
+     * @param clock the clock used when selecting the actionable alarm
+     */
+    public BedSideCommands(Clock clock) {
+        this.clock = clock;
     }
 
     /**
-     * Parses a temperature command into a double value, or NaN when unsupported.
+     * Dispatches one command to its corresponding Eight Sleep operation.
+     *
+     * @param channelUID the commanded channel
+     * @param command the openHAB command
+     * @param context the values available to command operations
+     * @throws ApiException if synchronous request validation fails
      */
-    public static double parseTemperature(org.openhab.core.types.Command command) {
+    public void dispatch(ChannelUID channelUID, Command command, Context context) throws ApiException {
+        switch (channelUID.getIdWithoutGroup()) {
+            case CHANNEL_TARGET_TEMPERATURE -> targetTemperature(context, command);
+            case CHANNEL_SIDE_POWER -> sidePower(context, command);
+            case CHANNEL_HEAD_ANGLE -> baseAngle(context, command, true);
+            case CHANNEL_FEET_ANGLE -> baseAngle(context, command, false);
+            case CHANNEL_BASE_PRESET -> basePreset(context, command);
+            case CHANNEL_PILLOW_POWER -> pillowPower(context, command);
+            case CHANNEL_PILLOW_TARGET_TEMPERATURE -> pillowTargetTemperature(context, command);
+            case CHANNEL_ALARM_ENABLED -> alarmEnabled(context, command);
+            case CHANNEL_ALARM_TIME -> alarmTime(context, command);
+            case CHANNEL_DISMISS_ALARM -> {
+                if (command == OnOffType.ON) {
+                    dismissAlarm(context);
+                }
+            }
+            case CHANNEL_SNOOZE_ALARM -> {
+                if (command == OnOffType.ON) {
+                    snoozeAlarm(context);
+                }
+            }
+            case CHANNEL_AWAY_MODE -> awayMode(context, command);
+            case CHANNEL_PRIME -> {
+                if (command == OnOffType.ON) {
+                    primePod(context);
+                }
+            }
+            case CHANNEL_LED_BRIGHTNESS -> ledBrightness(context, command);
+            case CHANNEL_SNORE_MITIGATION -> LOGGER.debug("Snore mitigation is read-only");
+            default -> LOGGER.warn("Unsupported channel {} for command {}", channelUID, command);
+        }
+    }
+
+    private static double parseTemperature(Command command) {
         if (command instanceof QuantityType<?> quantity) {
             javax.measure.Unit<?> unit = quantity.getUnit();
+            if (unit.equals(ImperialUnits.FAHRENHEIT)) {
+                QuantityType<?> fahr = quantity.toInvertibleUnit(ImperialUnits.FAHRENHEIT);
+                return fahr != null ? fahr.doubleValue() : quantity.doubleValue();
+            }
             if (unit.isCompatible(org.openhab.core.library.unit.SIUnits.CELSIUS)) {
                 QuantityType<?> celsius = quantity.toInvertibleUnit(org.openhab.core.library.unit.SIUnits.CELSIUS);
                 return celsius != null ? celsius.doubleValue() : quantity.doubleValue();
-            }
-            if (unit.isCompatible(ImperialUnits.FAHRENHEIT)) {
-                QuantityType<?> fahr = quantity.toInvertibleUnit(ImperialUnits.FAHRENHEIT);
-                return fahr != null ? fahr.doubleValue() : quantity.doubleValue();
             }
             return Double.NaN;
         }
@@ -100,7 +143,7 @@ public final class BedSideCommands {
      * axis takes the commanded (clamped) angle, the other axis keeps its last known
      * angle so it does not move.
      */
-    public static int[] mergeBaseAngles(boolean head, int angle, @Nullable Integer cachedLeg,
+    private static int[] mergeBaseAngles(boolean head, int angle, @Nullable Integer cachedLeg,
             @Nullable Integer cachedTorso) {
         int clamped = Math.max(0, Math.min(head ? HEAD_ANGLE_MAX : FEET_ANGLE_MAX, angle));
         int currentLeg = cachedLeg != null ? cachedLeg : 0;
@@ -112,9 +155,10 @@ public final class BedSideCommands {
      * Resolves the alarm the alarm channels target and runs {@code action} with it;
      * logs and returns silently when no actionable alarm exists.
      */
-    private static void withTargetAlarm(Context ctx, String action, java.util.function.Consumer<Alarm> consumer) {
+    private void withTargetAlarm(Context ctx, String action, java.util.function.Consumer<Alarm> consumer) {
         UserDataSnapshot userData = ctx.userData();
-        Alarm alarm = userData != null ? AlarmSelector.findTargetAlarm(userData.alarms(), Instant.now()) : null;
+        Alarm alarm = userData != null ? AlarmSelector.findTargetAlarm(userData.alarms(), clock.instant(), ctx.zone())
+                : null;
         if (alarm == null || alarm.id() == null) {
             LOGGER.debug("No upcoming alarm to {}", action);
             return;
@@ -135,20 +179,17 @@ public final class BedSideCommands {
 
     // ==================== individual commands ====================
 
-    public static void targetTemperature(Context ctx, org.openhab.core.types.Command command) throws ApiException {
+    private static void targetTemperature(Context ctx, Command command) throws ApiException {
         double temperature = parseTemperature(command);
         if (Double.isNaN(temperature)) {
             return;
         }
-        boolean fahrenheit = ctx.fahrenheit();
-        if (command instanceof QuantityType<?> quantity) {
-            fahrenheit = quantity.getUnit().isCompatible(ImperialUnits.FAHRENHEIT);
-        }
+        boolean fahrenheit = commandUsesFahrenheit(command, ctx.fahrenheit());
         int level = HeatingLevelConversion.temperatureToLevel(temperature, fahrenheit);
         apply(ctx, ctx.service().setHeatingLevel(ctx.userId(), level, 0));
     }
 
-    public static void sidePower(Context ctx, org.openhab.core.types.Command command) throws ApiException {
+    private static void sidePower(Context ctx, Command command) throws ApiException {
         boolean turnOn = command == OnOffType.ON;
         // Optimistic feedback + timestamped command: the sync loop does last-write-wins
         // against the polled payload, so no stale cycle can flip the switch back.
@@ -156,8 +197,7 @@ public final class BedSideCommands {
         apply(ctx, turnOn ? ctx.service().turnOnSide(ctx.userId()) : ctx.service().turnOffSide(ctx.userId()));
     }
 
-    public static void baseAngle(Context ctx, org.openhab.core.types.Command command, boolean head)
-            throws ApiException {
+    private static void baseAngle(Context ctx, Command command, boolean head) throws ApiException {
         int angle;
         if (command instanceof QuantityType<?> quantity) {
             angle = (int) Math.round(quantity.doubleValue());
@@ -186,7 +226,7 @@ public final class BedSideCommands {
         apply(ctx, ctx.service().setBaseAngle(ctx.userId(), devId, angles[0], angles[1]));
     }
 
-    public static void basePreset(Context ctx, org.openhab.core.types.Command command) {
+    private static void basePreset(Context ctx, Command command) {
         String devId = ctx.deviceId();
         if (devId == null) {
             LOGGER.debug("No device id; cannot set base preset");
@@ -195,7 +235,7 @@ public final class BedSideCommands {
         apply(ctx, ctx.service().setBasePreset(ctx.userId(), devId, command.toString().toLowerCase()));
     }
 
-    public static void pillowPower(Context ctx, org.openhab.core.types.Command command) {
+    private static void pillowPower(Context ctx, Command command) {
         var future = command == OnOffType.ON ? ctx.service().turnOnPillow(ctx.userId())
                 : command == OnOffType.OFF ? ctx.service().turnOffPillow(ctx.userId()) : null;
         if (future != null) {
@@ -203,12 +243,13 @@ public final class BedSideCommands {
         }
     }
 
-    public static void pillowTargetTemperature(Context ctx, org.openhab.core.types.Command command) {
+    private static void pillowTargetTemperature(Context ctx, Command command) {
         double temperature = parseTemperature(command);
         if (Double.isNaN(temperature)) {
             return;
         }
-        int level = HeatingLevelConversion.temperatureToLevel(temperature, ctx.fahrenheit());
+        int level = HeatingLevelConversion.temperatureToLevel(temperature,
+                commandUsesFahrenheit(command, ctx.fahrenheit()));
 
         UserDataSnapshot data = ctx.userData();
         PillowState pillowState = data != null ? data.pillowState() : null;
@@ -221,7 +262,7 @@ public final class BedSideCommands {
         apply(ctx, future);
     }
 
-    public static void alarmEnabled(Context ctx, org.openhab.core.types.Command command) {
+    private void alarmEnabled(Context ctx, Command command) {
         withTargetAlarm(ctx, "toggle", alarm -> {
             boolean enable = command == OnOffType.ON;
             // Optimistic feedback + timestamped command (LWW vs the polled list).
@@ -230,7 +271,7 @@ public final class BedSideCommands {
         });
     }
 
-    public static void alarmTime(Context ctx, org.openhab.core.types.Command command) {
+    private void alarmTime(Context ctx, Command command) {
         Instant newTime;
         if (command instanceof org.openhab.core.library.types.DateTimeType dateTime) {
             newTime = dateTime.getInstant();
@@ -240,29 +281,29 @@ public final class BedSideCommands {
                 LOGGER.warn("Cannot parse '{}' as an alarm time", string);
                 return;
             }
-            newTime = parsed.atDate(LocalDate.now()).atZone(ZoneId.systemDefault()).toInstant();
+            newTime = parsed.atDate(LocalDate.now(clock.withZone(ctx.zone()))).atZone(ctx.zone()).toInstant();
         } else {
             LOGGER.warn("Unsupported command type {} for alarm time", command.getClass().getSimpleName());
             return;
         }
 
         withTargetAlarm(ctx, "reschedule", alarm -> {
-            String timeOfDay = LocalDateTime.ofInstant(newTime, ZoneId.systemDefault())
+            String timeOfDay = LocalDateTime.ofInstant(newTime, ctx.zone())
                     .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
             apply(ctx, ctx.service().setAlarmTime(ctx.userId(), alarm, timeOfDay));
         });
     }
 
-    public static void dismissAlarm(Context ctx) {
+    private void dismissAlarm(Context ctx) {
         withTargetAlarm(ctx, "dismiss", alarm -> apply(ctx, ctx.service().dismissAlarm(ctx.userId(), alarm.id())));
     }
 
-    public static void snoozeAlarm(Context ctx) {
+    private void snoozeAlarm(Context ctx) {
         withTargetAlarm(ctx, "snooze",
                 alarm -> apply(ctx, ctx.service().snoozeAlarm(ctx.userId(), alarm.id(), DEFAULT_SNOOZE_MINUTES)));
     }
 
-    public static void awayMode(Context ctx, org.openhab.core.types.Command command) {
+    private static void awayMode(Context ctx, Command command) {
         boolean start = command == OnOffType.ON;
         // Optimistic feedback + timestamped stamp (LWW vs the away poll), same as
         // the other mutable channels; the away poll confirms/corrects.
@@ -280,7 +321,7 @@ public final class BedSideCommands {
         }
     }
 
-    public static void primePod(Context ctx) {
+    private static void primePod(Context ctx) {
         String devId = ctx.deviceId();
         if (devId != null) {
             apply(ctx, ctx.service().primePod(devId, ctx.userId()));
@@ -289,7 +330,7 @@ public final class BedSideCommands {
         }
     }
 
-    public static void ledBrightness(Context ctx, org.openhab.core.types.Command command) {
+    private static void ledBrightness(Context ctx, Command command) {
         String devId = ctx.deviceId();
         int level = command instanceof DecimalType decimal ? decimal.intValue()
                 : command instanceof QuantityType<?> quantity ? (int) Math.round(quantity.doubleValue()) : -1;
@@ -298,5 +339,10 @@ public final class BedSideCommands {
         } else {
             LOGGER.warn("Cannot apply LED brightness from command {}", command);
         }
+    }
+
+    private static boolean commandUsesFahrenheit(Command command, boolean fallback) {
+        return command instanceof QuantityType<?> quantity ? quantity.getUnit().equals(ImperialUnits.FAHRENHEIT)
+                : fallback;
     }
 }

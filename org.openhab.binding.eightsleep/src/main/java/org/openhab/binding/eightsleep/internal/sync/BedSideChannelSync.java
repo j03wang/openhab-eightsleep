@@ -21,7 +21,6 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 import org.openhab.binding.eightsleep.internal.model.BedSide;
 import org.openhab.binding.eightsleep.internal.model.DeviceState;
-import org.openhab.binding.eightsleep.internal.model.TemperatureState;
 import org.openhab.binding.eightsleep.internal.polling.DataFreshness;
 import org.openhab.binding.eightsleep.internal.polling.UserDataSnapshot;
 import org.openhab.binding.eightsleep.internal.sync.LastWriteWins.CommandedValue;
@@ -39,10 +38,6 @@ import org.openhab.binding.eightsleep.internal.sync.SyncResult.StatusAction;
 @NonNullByDefault
 public final class BedSideChannelSync {
 
-    private BedSideChannelSync() {
-        throw new IllegalAccessError("Non-instantiable");
-    }
-
     /**
      * Computes all channel updates for one sync cycle.
      *
@@ -51,8 +46,8 @@ public final class BedSideChannelSync {
      * @param awayModeCommand pending away-mode command stamp (null = none)
      * @param lastKnownTargetLevel previously persisted shown target level (null = never set)
      */
-    public static SyncResult compute(@Nullable DeviceState deviceState, @Nullable UserDataSnapshot userData,
-            BedSide side, boolean fahrenheit, long userIntervalSeconds, Instant now, ZoneId zone,
+    public SyncResult compute(@Nullable DeviceState deviceState, @Nullable UserDataSnapshot userData, BedSide side,
+            boolean fahrenheit, long userIntervalSeconds, Instant now, ZoneId zone,
             @Nullable CommandedValue sidePowerCommand, @Nullable CommandedValue alarmEnabledCommand,
             @Nullable CommandedValue awayModeCommand, @Nullable Double lastKnownTargetLevel) {
         SyncCollector r = new SyncCollector();
@@ -75,38 +70,5 @@ public final class BedSideChannelSync {
         AccessoryChannelMapper.publish(userData, side, fahrenheit, r);
         AlarmChannelMapper.publish(userData, now, zone, userIntervalSeconds, alarmEnabledCommand, r);
         return r.build();
-    }
-
-    /**
-     * Upstream quirk: while off the API reports target level 0 (27 C), which is
-     * meaningless. The shown target holds the last MEANINGFUL level; a genuinely
-     * commanded 0 (heating flag set) or any non-zero value wins. Returns both the
-     * shown level; caller persists it.
-     */
-    public static double resolveShownTargetLevel(double targetLevelRaw, @Nullable Boolean nowHeating,
-            @Nullable Double previousShown) {
-        boolean meaningful = targetLevelRaw != 0 || Boolean.TRUE.equals(nowHeating);
-        if (meaningful || previousShown == null) {
-            return targetLevelRaw;
-        }
-        return previousShown;
-    }
-
-    /**
-     * Heating/cooling/idle from the raw target level sign. Level 0 is neutral
-     * (27 C) - actively tracking it is neither heating nor cooling.
-     */
-    public static String deriveHeatingState(boolean nowHeating, double targetLevelRaw) {
-        if (!nowHeating || targetLevelRaw == 0) {
-            return "idle";
-        }
-        return targetLevelRaw > 0 ? "heating" : "cooling";
-    }
-
-    /**
-     * Raw heating level Autopilot targets (smartSchedule.bedTimeLevel), or null.
-     */
-    public static @Nullable Double autopilotTargetLevel(@Nullable TemperatureState temperature) {
-        return temperature != null ? temperature.smartLevel("bedTimeLevel") : null;
     }
 }

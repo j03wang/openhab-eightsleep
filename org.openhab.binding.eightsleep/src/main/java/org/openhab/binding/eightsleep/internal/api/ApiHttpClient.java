@@ -13,7 +13,6 @@
 package org.openhab.binding.eightsleep.internal.api;
 
 import java.net.URI;
-import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -34,37 +33,67 @@ import org.slf4j.LoggerFactory;
  * @author Joe Wang - Initial contribution
  */
 @NonNullByDefault
-public class ApiHttpClient {
+public final class ApiHttpClient implements EightSleepApiClient.Transport, TokenManager.AuthTransport {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ApiHttpClient.class);
 
-    private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15))
-            .followRedirects(HttpClient.Redirect.NORMAL).build();
+    private final HttpClient httpClient;
+    private final ApiJsonCodec jsonCodec;
 
-    private ApiHttpClient() {
-        throw new IllegalAccessError("Non-instantiable");
+    /**
+     * Creates a production transport with a dedicated JDK HTTP client and JSON codec.
+     */
+    public ApiHttpClient() {
+        this(new ApiJsonCodec());
     }
 
-    public static CompletableFuture<String> getJson(String url, @Nullable String accessToken) {
-        return send("GET", url, null, accessToken);
+    /**
+     * Creates a production transport using the supplied JSON codec.
+     *
+     * @param jsonCodec the API JSON codec
+     */
+    public ApiHttpClient(ApiJsonCodec jsonCodec) {
+        this(HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).followRedirects(HttpClient.Redirect.NORMAL)
+                .build(), jsonCodec);
     }
 
-    public static CompletableFuture<String> postJson(String url, @Nullable Object jsonBody,
-            @Nullable String accessToken) {
-        return send("POST", url, GsonHelper.toJson(jsonBody), accessToken);
+    /**
+     * Creates a transport from injectable protocol dependencies.
+     *
+     * @param httpClient the JDK HTTP client
+     * @param jsonCodec the API JSON codec
+     */
+    public ApiHttpClient(HttpClient httpClient, ApiJsonCodec jsonCodec) {
+        this.httpClient = httpClient;
+        this.jsonCodec = jsonCodec;
     }
 
-    public static CompletableFuture<String> putJson(String url, @Nullable Object jsonBody,
-            @Nullable String accessToken) {
-        return send("PUT", url, GsonHelper.toJson(jsonBody), accessToken);
+    @Override
+    public CompletableFuture<String> authenticate(String clientId, String clientSecret, String username,
+            String password) {
+        return send("POST", ApiConstants.AUTH_URL,
+                jsonCodec.toJson(TokenManager.AuthRequest.of(clientId, clientSecret, username, password)), null);
     }
 
-    public static CompletableFuture<String> send(String method, String url, @Nullable String jsonBody,
+    @Override
+    public CompletableFuture<String> refresh(String clientId, String clientSecret, String refreshToken) {
+        return send("POST", ApiConstants.AUTH_URL,
+                jsonCodec.toJson(TokenManager.RefreshRequest.of(clientId, clientSecret, refreshToken)), null);
+    }
+
+    @Override
+    public CompletableFuture<String> send(String method, String url, @Nullable String jsonBody,
             @Nullable String accessToken) {
         return send(method, url, jsonBody, accessToken, Map.of());
     }
 
-    public static CompletableFuture<String> send(String method, String url, @Nullable String jsonBody,
+    @Override
+    public CompletableFuture<String> sendWithHeaders(String method, String url, @Nullable String jsonBody,
+            @Nullable String accessToken, Map<String, String> extraHeaders) {
+        return send(method, url, jsonBody, accessToken, extraHeaders);
+    }
+
+    private CompletableFuture<String> send(String method, String url, @Nullable String jsonBody,
             @Nullable String accessToken, Map<String, String> extraHeaders) {
         HttpRequest.Builder builder = HttpRequest.newBuilder().uri(URI.create(url))
                 .timeout(Duration.ofSeconds(ApiConstants.REQUEST_TIMEOUT_SECONDS));
@@ -89,7 +118,7 @@ public class ApiHttpClient {
         HttpRequest request = builder.build();
         LOGGER.debug("{} {}", method, url);
 
-        return HTTP_CLIENT.sendAsync(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
+        return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
                 .thenCompose(response -> {
                     int status = response.statusCode();
                     if (status >= 200 && status < 300) {
@@ -106,11 +135,7 @@ public class ApiHttpClient {
                 });
     }
 
-    public static String urlEncode(String value) {
-        return URLEncoder.encode(value, StandardCharsets.UTF_8);
-    }
-
-    static String truncate(@Nullable String body) {
+    private static String truncate(@Nullable String body) {
         if (body == null) {
             return "";
         }

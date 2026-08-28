@@ -45,8 +45,7 @@ public class TokenManager {
     private final AuthTransport authTransport;
 
     /**
-     * Seam for tests: performs the OAuth token request. Production posts JSON to
-     * {@link ApiConstants#AUTH_URL}; tests substitute canned responses.
+     * Transport port for OAuth authentication and token refresh.
      */
     public interface AuthTransport {
         CompletableFuture<String> authenticate(String clientId, String clientSecret, String username, String password);
@@ -56,37 +55,49 @@ public class TokenManager {
          * {@code refresh_token} grant.
          */
         default CompletableFuture<String> refresh(String clientId, String clientSecret, String refreshToken) {
-            return ApiHttpClient.postJson(ApiConstants.AUTH_URL,
-                    RefreshRequest.of(clientId, clientSecret, refreshToken), null);
+            return CompletableFuture.failedFuture(new ApiException("Refresh-token grant is not supported"));
         }
     }
 
-    /** Production transport: POST the snake_case OAuth body as raw JSON. */
-    static final AuthTransport DEFAULT_AUTH_TRANSPORT = (clientId, clientSecret, username, password) -> ApiHttpClient
-            .postJson(ApiConstants.AUTH_URL, AuthRequest.of(clientId, clientSecret, username, password), null);
-
     private volatile long expiryEpochSeconds;
     private final java.time.Clock clock;
+    private final ApiJsonCodec jsonCodec;
 
     public TokenManager(String username, String password, @Nullable String clientId, @Nullable String clientSecret) {
-        this(username, password, clientId, clientSecret, DEFAULT_AUTH_TRANSPORT, java.time.Clock.systemUTC());
+        this(username, password, clientId, clientSecret, new ApiHttpClient(), java.time.Clock.systemUTC(),
+                new ApiJsonCodec());
     }
 
     /**
-     * Test seam: injects the auth transport so token behaviour can be exercised
-     * without network access.
+     * Creates a token manager with an injected authentication transport.
      */
     public TokenManager(String username, String password, @Nullable String clientId, @Nullable String clientSecret,
             AuthTransport authTransport) {
-        this(username, password, clientId, clientSecret, authTransport, java.time.Clock.systemUTC());
+        this(username, password, clientId, clientSecret, authTransport, java.time.Clock.systemUTC(),
+                new ApiJsonCodec());
     }
 
     /**
-     * Test seam: injects both the auth transport and the clock so expiry
-     * behaviour can be exercised deterministically.
+     * Creates a token manager with injected authentication and time dependencies.
      */
     public TokenManager(String username, String password, @Nullable String clientId, @Nullable String clientSecret,
             AuthTransport authTransport, java.time.Clock clock) {
+        this(username, password, clientId, clientSecret, authTransport, clock, new ApiJsonCodec());
+    }
+
+    /**
+     * Creates a token manager from injectable authentication, time, and JSON dependencies.
+     *
+     * @param username the account username
+     * @param password the account password
+     * @param clientId the optional OAuth client id
+     * @param clientSecret the optional OAuth client secret
+     * @param authTransport the OAuth transport
+     * @param clock the clock used for token expiry
+     * @param jsonCodec the API JSON codec
+     */
+    public TokenManager(String username, String password, @Nullable String clientId, @Nullable String clientSecret,
+            AuthTransport authTransport, java.time.Clock clock, ApiJsonCodec jsonCodec) {
         this.username = username;
         this.password = password;
         // Defaults match the values used by the official mobile app
@@ -95,6 +106,7 @@ public class TokenManager {
                 : ApiConstants.KNOWN_CLIENT_SECRET;
         this.authTransport = authTransport;
         this.clock = clock;
+        this.jsonCodec = jsonCodec;
     }
 
     private @Nullable String accessToken;
@@ -196,7 +208,7 @@ public class TokenManager {
     }
 
     private void completeAuth(CompletableFuture<AuthResponse> future, String body) {
-        AuthResponse response = GsonHelper.fromJson(body, AuthResponse.class);
+        AuthResponse response = jsonCodec.fromJson(body, AuthResponse.class);
         if (response != null && response.getAccessToken() != null && response.getExpiresIn() != null) {
             future.complete(response);
         } else {

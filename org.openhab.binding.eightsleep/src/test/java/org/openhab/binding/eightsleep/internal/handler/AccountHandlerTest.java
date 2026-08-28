@@ -18,16 +18,21 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.junit.Test;
+import org.openhab.binding.eightsleep.internal.api.EightSleepService;
+import org.openhab.binding.eightsleep.internal.api.TokenManager;
 import org.openhab.binding.eightsleep.internal.model.BedSide;
+import org.openhab.binding.eightsleep.internal.model.DeviceState;
+import org.openhab.core.config.core.Configuration;
 import org.openhab.core.thing.Bridge;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.openhab.core.thing.binding.ThingHandlerCallback;
 
 /**
  * Tests account-handler decisions and bed-side registration ownership.
@@ -37,32 +42,37 @@ import org.slf4j.LoggerFactory;
 @NonNullByDefault
 public class AccountHandlerTest {
 
-    private static final Logger LOG = LoggerFactory.getLogger(AccountHandlerTest.class);
-
     @Test
-    public void configuredDevicePreferredWhenKnown() {
+    public void configuredDeviceIsSelectedThroughConnectionLifecycle() throws Exception {
         var devices = new LinkedHashMap<>(Map.of("dev_b", "B", "dev_a", "A"));
-        assertEquals("dev_a", AccountHandler.chooseDeviceId(devices, "dev_a", LOG));
+        AccountHandler account = connectingAccount(devices, "dev_b");
+        try {
+            awaitDevice(account);
+            assertEquals("dev_b", account.getDeviceId());
+        } finally {
+            account.dispose();
+        }
     }
 
     @Test
-    public void unknownConfiguredDeviceFallsBackToFirstSorted() {
+    public void unknownConfiguredDeviceFallsBackThroughConnectionLifecycle() throws Exception {
         var devices = new LinkedHashMap<>(Map.of("dev_z", "Z", "dev_a", "A"));
-        assertEquals("dev_a", AccountHandler.chooseDeviceId(devices, "ghost", LOG));
-    }
-
-    @Test
-    public void blankConfigurationPicksFirstSorted() {
-        var devices = new LinkedHashMap<>(Map.of("dev_z", "Z", "dev_a", "A"));
-        assertEquals("dev_a", AccountHandler.chooseDeviceId(devices, "", LOG));
-        assertEquals("dev_a", AccountHandler.chooseDeviceId(devices, null, LOG));
-        assertEquals("dev_a", AccountHandler.chooseDeviceId(devices, "  ", LOG));
+        AccountHandler account = connectingAccount(devices, "ghost");
+        try {
+            awaitDevice(account);
+            assertEquals("dev_a", account.getDeviceId());
+        } finally {
+            account.dispose();
+        }
     }
 
     @Test
     public void registrationIsUniqueAndDropsCachedData() {
         Bridge bridge = mock(Bridge.class);
-        AccountHandler account = new AccountHandler(bridge);
+        AccountHandler account = new AccountHandler(bridge, config -> {
+            throw new AssertionError("connection factory must not be used by registration operations");
+        });
+        account.setCallback(mock(ThingHandlerCallback.class));
 
         assertTrue(account.registerBedSide("u1", BedSide.LEFT));
         assertFalse(account.registerBedSide("u1", BedSide.LEFT));
@@ -75,5 +85,37 @@ public class AccountHandlerTest {
         assertTrue(account.registerBedSide("u1", BedSide.RIGHT));
 
         account.unregisterBedSide("ghost");
+        account.dispose();
+    }
+
+    private static AccountHandler connectingAccount(Map<String, String> devices, String configuredDevice) {
+        Bridge bridge = mock(Bridge.class);
+        Configuration configuration = new Configuration();
+        configuration.put("username", "me@example.com");
+        configuration.put("password", "secret");
+        configuration.put("deviceId", configuredDevice);
+        when(bridge.getConfiguration()).thenReturn(configuration);
+        when(bridge.getProperties()).thenReturn(Map.of());
+
+        TokenManager tokenManager = mock(TokenManager.class);
+        when(tokenManager.getAccessTokenAsync()).thenReturn(CompletableFuture.completedFuture("token"));
+        EightSleepService service = mock(EightSleepService.class);
+        when(service.getHouseholdDevices()).thenReturn(CompletableFuture.completedFuture(devices));
+        when(service.getDeviceState(org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(CompletableFuture.completedFuture(DeviceState.EMPTY));
+
+        AccountHandler account = new AccountHandler(bridge,
+                config -> new AccountHandler.AccountConnection(tokenManager, service));
+        account.setCallback(mock(ThingHandlerCallback.class));
+        account.initialize();
+        return account;
+    }
+
+    private static void awaitDevice(AccountHandler account) throws Exception {
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+        while (account.getDeviceId() == null && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertNotNull("device selection did not complete", account.getDeviceId());
     }
 }

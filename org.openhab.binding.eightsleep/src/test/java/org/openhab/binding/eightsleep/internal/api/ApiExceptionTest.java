@@ -67,31 +67,4 @@ public class ApiExceptionTest {
         assertFalse(e.isUnauthorized());
         assertFalse(e.isSubscriptionRequired());
     }
-
-    /** Sanity for the static helper used when building error messages. */
-    @Test
-    public void messageTruncationHelper() {
-        String longBody = "x".repeat(600);
-        String truncated = ApiHttpClient.truncate(longBody);
-        assertEquals(503, truncated.length());
-        assertTrue(truncated.endsWith("..."));
-        assertEquals("", ApiHttpClient.truncate(null));
-        assertEquals("short", ApiHttpClient.truncate("short"));
-    }
-
-    // ==================== urlEncode ====================
-
-    /**
-     * URL encoding must be form-style (space -> "+", reserved chars percent-encoded),
-     * matching {@code URLEncoder} semantics used for userIds/deviceIds/timezones.
-     */
-    @Test
-    public void urlEncodingIsFormStyle() {
-        assertEquals("u_abc-123", ApiHttpClient.urlEncode("u_abc-123"));
-        assertEquals("a+b+c", ApiHttpClient.urlEncode("a b c"));
-        assertEquals("a%2Bb", ApiHttpClient.urlEncode("a+b"));
-        assertEquals("%2Fusers%2Fme", ApiHttpClient.urlEncode("/users/me"));
-        assertEquals("%C3%A9", ApiHttpClient.urlEncode("\u00e9"));
-        assertEquals("", ApiHttpClient.urlEncode(""));
-    }
 }

@@ -28,6 +28,7 @@ import org.openhab.binding.eightsleep.internal.api.ApiTestFixtures;
 import org.openhab.binding.eightsleep.internal.model.BedSide;
 import org.openhab.binding.eightsleep.internal.model.DeviceState;
 import org.openhab.binding.eightsleep.internal.polling.UserDataCache;
+import org.openhab.binding.eightsleep.internal.sync.SyncResult.ChannelUpdate;
 import org.openhab.binding.eightsleep.internal.sync.SyncResult.StatusAction;
 import org.openhab.core.library.types.DateTimeType;
 import org.openhab.core.library.types.DecimalType;
@@ -88,16 +89,16 @@ public class BedSideChannelSyncTest {
 
     @Test
     public void missingDeviceDataMeansBridgeOffline() {
-        var r = BedSideChannelSync.compute(null, new UserDataCache().snapshot(), BedSide.LEFT, false, 30, NOW, ZONE,
-                null, null, null, null);
+        var r = new BedSideChannelSync().compute(null, new UserDataCache().snapshot(), BedSide.LEFT, false, 30, NOW,
+                ZONE, null, null, null, null);
         assertEquals(StatusAction.BRIDGE_OFFLINE, r.statusAction());
         assertTrue(r.updates().isEmpty());
     }
 
     @Test
     public void missingUserDataMeansConfigurationError() {
-        var r = BedSideChannelSync.compute(DeviceState.EMPTY, null, BedSide.LEFT, false, 30, NOW, ZONE, null, null,
-                null, null);
+        var r = new BedSideChannelSync().compute(DeviceState.EMPTY, null, BedSide.LEFT, false, 30, NOW, ZONE, null,
+                null, null, null);
         assertEquals(StatusAction.USER_NOT_FOUND, r.statusAction());
     }
 
@@ -107,8 +108,8 @@ public class BedSideChannelSyncTest {
         ud.lastUpdated = NOW.minusSeconds(3600); // way past the 120 s threshold
         var dd = deviceData("{\"result\":{\"leftHeatingLevel\":-10}}");
 
-        var r = BedSideChannelSync.compute(dd, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE, null, null, null,
-                null);
+        var r = new BedSideChannelSync().compute(dd, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE, null, null,
+                null, null);
         assertEquals(StatusAction.STALE_DATA, r.statusAction());
         assertNotNull("cached values still publish while stale", update(r, "device#heatingLevel"));
     }
@@ -116,8 +117,8 @@ public class BedSideChannelSyncTest {
     @Test
     public void freshDataMeansOnline() {
         var ud = userData("{\"days\":[]}", "{\"currentState\":{\"type\":\"smart\"}}", null, null);
-        var r = BedSideChannelSync.compute(DeviceState.EMPTY, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE, null,
-                null, null, null);
+        var r = new BedSideChannelSync().compute(DeviceState.EMPTY, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE,
+                null, null, null, null);
         assertEquals(StatusAction.ONLINE, r.statusAction());
     }
 
@@ -132,8 +133,8 @@ public class BedSideChannelSyncTest {
     @Test
     public void heatingChannelsFromDevicePayload() {
         var ud = userData("{\"days\":[]}", "{\"currentState\":{\"type\":\"smart\"}}", null, null);
-        var r = BedSideChannelSync.compute(deviceData(FULL_DEVICE), ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE,
-                null, null, null, null);
+        var r = new BedSideChannelSync().compute(deviceData(FULL_DEVICE), ud.snapshot(), BedSide.LEFT, false, 30, NOW,
+                ZONE, null, null, null, null);
 
         assertEquals(-16.0, ((DecimalType) update(r, "device#heatingLevel").state()).doubleValue(), 1e-9);
         // level -41 converts to ~24 C via the app table
@@ -155,15 +156,15 @@ public class BedSideChannelSyncTest {
         DeviceState off = deviceData(
                 "{\"result\":{\"leftHeatingLevel\":0,\"leftTargetHeatingLevel\":0,\"leftNowHeating\":false}}");
 
-        var r1 = BedSideChannelSync.compute(off, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE, null, null, null,
-                -41.0);
+        var r1 = new BedSideChannelSync().compute(off, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE, null, null,
+                null, -41.0);
         var target = (QuantityType<?>) update(r1, "current#targetTemperature").state();
         assertEquals(22.11, target.doubleValue(), 0.01);
         assertEquals(Double.valueOf(-41.0), r1.lastKnownTargetLevel());
 
         // first poll ever has nothing to hold: shows the neutral 27 C
-        var r2 = BedSideChannelSync.compute(off, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE, null, null, null,
-                null);
+        var r2 = new BedSideChannelSync().compute(off, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE, null, null,
+                null, null);
         var t2 = (QuantityType<?>) update(r2, "current#targetTemperature").state();
         assertEquals(27.0, t2.doubleValue(), 0.01);
         assertEquals(Double.valueOf(0.0), r2.lastKnownTargetLevel());
@@ -176,8 +177,8 @@ public class BedSideChannelSyncTest {
                 null, null);
         DeviceState noTarget = deviceData("{\"result\":{\"leftHeatingLevel\":-16}}");
 
-        var r = BedSideChannelSync.compute(noTarget, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE, null, null,
-                null, null);
+        var r = new BedSideChannelSync().compute(noTarget, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE, null,
+                null, null, null);
         assertTrue(r.targetLevelAbsent());
         var target = (QuantityType<?>) update(r, "current#targetTemperature").state();
         assertEquals(23.13, target.doubleValue(), 0.01);
@@ -204,8 +205,8 @@ public class BedSideChannelSyncTest {
     @Test
     public void currentAndLastSleepChannelsPopulated() {
         var ud = userData(TRENDS, "{\"currentState\":{\"type\":\"smart\"}}", null, null);
-        var r = BedSideChannelSync.compute(DeviceState.EMPTY, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE, null,
-                null, null, null);
+        var r = new BedSideChannelSync().compute(DeviceState.EMPTY, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE,
+                null, null, null, null);
 
         // The CURRENT (latest-day) session carries no temps in this fixture - its
         // heartRate is fresh though. Temps live on the previous day's session which
@@ -237,8 +238,8 @@ public class BedSideChannelSyncTest {
                     "timeseries":{"tempBedC":[["2026-08-22T11:55:00Z",30.5]],
                       "heartRate":[["2026-08-22T11:59:00Z",55]]}}]}]}""";
         var ud = userData(liveTrends, "{\"currentState\":{\"type\":\"smart\"}}", null, null);
-        var r = BedSideChannelSync.compute(DeviceState.EMPTY, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE, null,
-                null, null, null);
+        var r = new BedSideChannelSync().compute(DeviceState.EMPTY, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE,
+                null, null, null, null);
         // 10 minutes in: the awake segment (600s) is fully consumed, so per the
         // documented rule the LAST fully-elapsed segment stays current until new
         // data arrives - which is still "awake" only until the next segment starts
@@ -253,13 +254,13 @@ public class BedSideChannelSyncTest {
     @Test
     public void awayModeUndefinedUntilFirstObservation() {
         var ud = userData("{\"days\":[]}", null, null, null);
-        var r = BedSideChannelSync.compute(DeviceState.EMPTY, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE, null,
-                null, null, null);
+        var r = new BedSideChannelSync().compute(DeviceState.EMPTY, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE,
+                null, null, null, null);
         assertEquals(UnDefType.UNDEF, update(r, "device#awayMode").state());
 
         // a pending command alone is enough to leave UNDEF
-        var r2 = BedSideChannelSync.compute(DeviceState.EMPTY, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE, null,
-                null, new LastWriteWins.CommandedValue(NOW, true), null);
+        var r2 = new BedSideChannelSync().compute(DeviceState.EMPTY, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE,
+                null, null, new LastWriteWins.CommandedValue(NOW, true), null);
         assertEquals(OnOffType.ON, update(r2, "device#awayMode").state());
     }
 
@@ -272,21 +273,21 @@ public class BedSideChannelSyncTest {
         // the command said OFF - and agreeing polled value retires the command.
         ud.awayObserved = true;
         ud.awayPolledAt = NOW.minusSeconds(10);
-        var post = BedSideChannelSync.compute(DeviceState.EMPTY, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE,
-                null, null, new LastWriteWins.CommandedValue(NOW.minusSeconds(60), false), null);
+        var post = new BedSideChannelSync().compute(DeviceState.EMPTY, ud.snapshot(), BedSide.LEFT, false, 30, NOW,
+                ZONE, null, null, new LastWriteWins.CommandedValue(NOW.minusSeconds(60), false), null);
         assertEquals(OnOffType.ON, update(post, "device#awayMode").state());
         assertTrue("polled confirmation retires the command", post.retireAwayModeCommand());
 
         // pre-command poll: command wins, stays pending
         ud.awayPolledAt = NOW.minusSeconds(120);
-        var pre = BedSideChannelSync.compute(DeviceState.EMPTY, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE, null,
-                null, new LastWriteWins.CommandedValue(NOW.minusSeconds(60), false), null);
+        var pre = new BedSideChannelSync().compute(DeviceState.EMPTY, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE,
+                null, null, new LastWriteWins.CommandedValue(NOW.minusSeconds(60), false), null);
         assertEquals(OnOffType.OFF, update(pre, "device#awayMode").state());
         assertFalse("contradicting stale poll keeps the command pending", pre.retireAwayModeCommand());
 
         // no command: polled value publishes as-is
-        var noCmd = BedSideChannelSync.compute(DeviceState.EMPTY, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE,
-                null, null, null, null);
+        var noCmd = new BedSideChannelSync().compute(DeviceState.EMPTY, ud.snapshot(), BedSide.LEFT, false, 30, NOW,
+                ZONE, null, null, null, null);
         assertEquals(OnOffType.ON, update(noCmd, "device#awayMode").state());
         assertFalse(noCmd.retireAwayModeCommand());
     }
@@ -297,13 +298,13 @@ public class BedSideChannelSyncTest {
         ud.temperatureAt = NOW.minusSeconds(60);
 
         // command newer than poll: OFF wins despite polled "off" agreeing? polled agrees -> retires
-        var r = BedSideChannelSync.compute(DeviceState.EMPTY, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE,
+        var r = new BedSideChannelSync().compute(DeviceState.EMPTY, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE,
                 new LastWriteWins.CommandedValue(NOW.minusSeconds(30), false), null, null, null);
         assertEquals(OnOffType.OFF, update(r, "device#sidePower").state());
         assertTrue("server value agrees with resolved -> retire", r.retireSidePowerCommand());
 
         // contradicting stale poll: command ON beats older poll-OFF, stays pending
-        var r2 = BedSideChannelSync.compute(DeviceState.EMPTY, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE,
+        var r2 = new BedSideChannelSync().compute(DeviceState.EMPTY, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE,
                 new LastWriteWins.CommandedValue(NOW, true), null, null, null);
         assertEquals(OnOffType.ON, update(r2, "device#sidePower").state());
         assertTrue(!r2.retireSidePowerCommand());
@@ -313,8 +314,8 @@ public class BedSideChannelSyncTest {
     public void alarmChannelsClearedOnFreshEmptyPoll() {
         var ud = userData("{\"days\":[]}", "{\"currentState\":{\"type\":\"smart\"}}", "null", null);
         ud.alarmsPolledAt = NOW; // fresh empty poll (e.g. subscription lapse)
-        var r = BedSideChannelSync.compute(DeviceState.EMPTY, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE, null,
-                null, null, null);
+        var r = new BedSideChannelSync().compute(DeviceState.EMPTY, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE,
+                null, null, null, null);
         assertEquals(UnDefType.UNDEF, update(r, "current#nextAlarm").state());
         assertEquals(UnDefType.UNDEF, update(r, "current#alarmEnabled").state());
     }
@@ -325,8 +326,8 @@ public class BedSideChannelSyncTest {
                 {"alarms":[{"id":"a1","enabled":true,"time":"07:00:00",
                   "repeat":{"enabled":true,"weekDays":{}}}]}""";
         var ud = userData("{\"days\":[]}", "{\"currentState\":{\"type\":\"smart\"}}", alarms, null);
-        var r = BedSideChannelSync.compute(DeviceState.EMPTY, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE, null,
-                null, null, null);
+        var r = new BedSideChannelSync().compute(DeviceState.EMPTY, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE,
+                null, null, null, null);
 
         var next = (DateTimeType) update(r, "current#nextAlarm").state();
         // daily 07:00 UTC alarm; NOW is Sat 12:00 UTC -> tomorrow 07:00
@@ -341,8 +342,8 @@ public class BedSideChannelSyncTest {
         var ud = userData("{\"days\":[]}", null, null,
                 "{\"left\":{\"preset\":{\"name\":\"reading\"},\"torso\":{\"currentAngle\":30},"
                         + "\"leg\":{\"currentAngle\":8},\"inSnoreMitigation\":false}}");
-        var r = BedSideChannelSync.compute(DeviceState.EMPTY, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE, null,
-                null, null, null);
+        var r = new BedSideChannelSync().compute(DeviceState.EMPTY, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE,
+                null, null, null, null);
         assertEquals("reading", ((StringType) update(r, "base#preset").state()).toString());
         assertEquals(30.0, ((QuantityType<?>) update(r, "base#headAngle").state()).doubleValue(), 1e-9);
         assertEquals(8.0, ((QuantityType<?>) update(r, "base#feetAngle").state()).doubleValue(), 1e-9);
@@ -355,8 +356,8 @@ public class BedSideChannelSyncTest {
         ud.pillowState = ApiTestFixtures.parsePillowData("""
                 {"devices":[{"device":{"specialization":"pillow","side":"left","deviceId":"p1"},
                   "currentLevel":-15,"currentState":{"type":"smart"}}]}""");
-        var r = BedSideChannelSync.compute(DeviceState.EMPTY, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE, null,
-                null, null, null);
+        var r = new BedSideChannelSync().compute(DeviceState.EMPTY, ud.snapshot(), BedSide.LEFT, false, 30, NOW, ZONE,
+                null, null, null, null);
         assertEquals(OnOffType.ON, update(r, "pillow#pillowPower").state());
         assertEquals(-15.0, ((DecimalType) update(r, "pillow#pillowHeatingLevel").state()).doubleValue(), 1e-9);
     }
@@ -366,8 +367,8 @@ public class BedSideChannelSyncTest {
     @Test
     public void fahrenheitQuantitiesWhenConfigured() {
         var ud = userData("{\"days\":[]}", "{\"currentState\":{\"type\":\"smart\"}}", null, null);
-        var r = BedSideChannelSync.compute(deviceData(FULL_DEVICE), ud.snapshot(), BedSide.LEFT, /* fahrenheit */ true,
-                30, NOW, ZONE, null, null, null, null);
+        var r = new BedSideChannelSync().compute(deviceData(FULL_DEVICE), ud.snapshot(), BedSide.LEFT,
+                /* fahrenheit */ true, 30, NOW, ZONE, null, null, null, null);
         var target = (QuantityType<?>) update(r, "current#targetTemperature").state();
         assertEquals(org.openhab.core.library.unit.ImperialUnits.FAHRENHEIT, target.getUnit());
         assertEquals(71.75, target.doubleValue(), 0.05);

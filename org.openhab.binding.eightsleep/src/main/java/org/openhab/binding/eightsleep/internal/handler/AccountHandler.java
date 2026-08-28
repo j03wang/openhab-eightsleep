@@ -26,7 +26,6 @@ import org.openhab.binding.eightsleep.internal.EightSleepBindingConstants;
 import org.openhab.binding.eightsleep.internal.api.ApiException;
 import org.openhab.binding.eightsleep.internal.api.EightSleepService;
 import org.openhab.binding.eightsleep.internal.api.TokenManager;
-import org.openhab.binding.eightsleep.internal.config.AccountConfigParser;
 import org.openhab.binding.eightsleep.internal.config.AccountConfiguration;
 import org.openhab.binding.eightsleep.internal.discovery.BedSideDiscoveryService;
 import org.openhab.binding.eightsleep.internal.model.BedSide;
@@ -54,6 +53,29 @@ import org.slf4j.LoggerFactory;
 @NonNullByDefault
 public class AccountHandler extends BaseBridgeHandler {
 
+    /**
+     * Authentication and domain service created for one connection attempt.
+     *
+     * @param tokenManager the connection's OAuth token manager
+     * @param service the connection's domain service
+     */
+    public record AccountConnection(TokenManager tokenManager, EightSleepService service) {
+    }
+
+    /**
+     * Creates connection-scoped API dependencies from account configuration.
+     */
+    @FunctionalInterface
+    public interface AccountConnectionFactory {
+        /**
+         * Creates one authenticated connection context.
+         *
+         * @param configuration the current account configuration
+         * @return connection-scoped authentication and service dependencies
+         */
+        AccountConnection create(AccountConfiguration configuration);
+    }
+
     private static final int TREND_LOOKBACK_DAYS = 3;
     private static final long AUTH_RETRY_SECONDS = 60;
 
@@ -62,6 +84,7 @@ public class AccountHandler extends BaseBridgeHandler {
     private @Nullable EightSleepService service;
 
     private final AccountPollingCoordinator pollingCoordinator;
+    private final AccountConnectionFactory connectionFactory;
 
     /** Pending reconnect attempt; cancelled on dispose and before scheduling a new one. */
     private @Nullable ScheduledFuture<?> reconnectJob;
@@ -72,9 +95,18 @@ public class AccountHandler extends BaseBridgeHandler {
     /** userId -> side of the single bedSide thing registered for it (1:1 model). */
     private final Map<String, BedSide> sideByUserId = new ConcurrentHashMap<>();
     private volatile @Nullable String deviceId;
+    private volatile long connectionGeneration;
+    private volatile boolean disposed;
 
-    public AccountHandler(Bridge bridge) {
+    /**
+     * Creates an account handler with an injectable connection factory.
+     *
+     * @param bridge the account bridge
+     * @param connectionFactory factory for connection-scoped API dependencies
+     */
+    public AccountHandler(Bridge bridge, AccountConnectionFactory connectionFactory) {
         super(bridge);
+        this.connectionFactory = connectionFactory;
         pollingCoordinator = new AccountPollingCoordinator(scheduler,
                 userId -> userDataByUser.computeIfAbsent(userId, key -> new UserDataCache()), this::acceptDeviceState,
                 error -> handlePollFailure("device", error));
@@ -82,6 +114,7 @@ public class AccountHandler extends BaseBridgeHandler {
 
     @Override
     public void initialize() {
+        disposed = false;
         AccountConfiguration config = getConfigAs(AccountConfiguration.class);
 
         if (config.username.isBlank() || config.password.isBlank()) {
@@ -105,50 +138,60 @@ public class AccountHandler extends BaseBridgeHandler {
      * {@link #scheduleReconnect} so the loop restarts until the bridge is disposed.
      */
     private void connect(AccountConfiguration config) {
-        TokenManager localTokenManager = new TokenManager(config.username, config.password,
-                AccountConfigParser.emptyToNull(config.clientId), AccountConfigParser.emptyToNull(config.clientSecret));
-        EightSleepService localService = new EightSleepService(localTokenManager);
+        long generation = beginConnectionAttempt();
+        AccountConnection connection = connectionFactory.create(config);
+        TokenManager localTokenManager = connection.tokenManager();
+        EightSleepService localService = connection.service();
 
         localTokenManager.getAccessTokenAsync().whenComplete((token, authFailure) -> {
+            if (!isCurrentConnection(generation)) {
+                return;
+            }
             if (authFailure != null) {
                 Throwable cause = authFailure.getCause() != null ? authFailure.getCause() : authFailure;
                 logger.debug("Eight Sleep authentication failed: {}", cause.getMessage());
                 updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR, cause.getMessage());
-                scheduleReconnect(config);
+                scheduleReconnect(config, generation);
                 return;
             }
             logger.debug("Eight Sleep authenticated");
-            this.service = localService;
 
             // resolve the pod (device id) to bind, then start polling
             localService.getHouseholdDevices().thenAccept(devices -> {
+                if (!isCurrentConnection(generation)) {
+                    return;
+                }
                 if (devices.isEmpty()) {
                     // A transient API hiccup can return an empty household - retry like any other
                     // failure instead of latching a terminal CONFIGURATION_ERROR.
                     logger.debug("No Eight Sleep devices found for this account (yet); retrying");
                     updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR,
                             "@text/account.status.no-devices");
-                    scheduleReconnect(config);
+                    scheduleReconnect(config, generation);
                     return;
                 }
-                String devId = chooseDeviceId(devices, config.deviceId, logger);
-                deviceId = devId;
+                String devId = chooseDeviceId(devices, config.deviceId);
 
                 Map<String, String> properties = new HashMap<>(thing.getProperties());
                 properties.put(EightSleepBindingConstants.CONFIG_USERNAME, config.username);
                 for (Map.Entry<String, String> entry : devices.entrySet()) {
                     properties.put("device." + entry.getKey(), entry.getValue());
                 }
+                if (!activateConnection(generation, config, localService, devId)) {
+                    return;
+                }
                 updateProperties(properties);
-
-                // start the poll jobs and go online
-                startPolling(config, localService, devId);
-                updateStatus(ThingStatus.ONLINE);
+                if (isCurrentConnection(generation)) {
+                    updateStatus(ThingStatus.ONLINE);
+                }
             }).exceptionally(ex -> {
+                if (!isCurrentConnection(generation)) {
+                    return null;
+                }
                 Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
                 logger.debug("Failed to initialize Eight Sleep account: {}", cause.getMessage());
                 updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR, cause.getMessage());
-                scheduleReconnect(config);
+                scheduleReconnect(config, generation);
                 return null;
             });
         });
@@ -157,10 +200,9 @@ public class AccountHandler extends BaseBridgeHandler {
     /**
      * Prefers the configured deviceId when it belongs to this account; otherwise the
      * first device in sorted order so multi-pod accounts get a stable choice across
-     * restarts. Static and unit-testable.
+     * restarts.
      */
-    static String chooseDeviceId(java.util.Map<String, String> devices, @Nullable String configured,
-            org.slf4j.Logger logger) {
+    private String chooseDeviceId(java.util.Map<String, String> devices, @Nullable String configured) {
         String configuredTrimmed = configured != null ? configured.trim() : "";
         if (!configuredTrimmed.isEmpty()) {
             if (devices.containsKey(configuredTrimmed)) {
@@ -176,9 +218,9 @@ public class AccountHandler extends BaseBridgeHandler {
 
     private synchronized void startPolling(AccountConfiguration config, EightSleepService service, String devId) {
         stopPolling();
-        long deviceInterval = AccountConfigParser.clampInterval(config.deviceRefreshInterval, 15, 600);
-        long userInterval = AccountConfigParser.clampInterval(config.userRefreshInterval, 15, 600);
-        long baseInterval = AccountConfigParser.clampInterval(config.baseRefreshInterval, 30, 900);
+        long deviceInterval = config.deviceRefreshIntervalSeconds();
+        long userInterval = config.userRefreshIntervalSeconds();
+        long baseInterval = config.baseRefreshIntervalSeconds();
 
         pollingCoordinator.start(service, devId, deviceInterval, userInterval, baseInterval, TREND_LOOKBACK_DAYS);
     }
@@ -197,7 +239,7 @@ public class AccountHandler extends BaseBridgeHandler {
      * so consumers can derive data-staleness thresholds from the same cadence.
      */
     public long userRefreshIntervalSeconds() {
-        return AccountConfigParser.clampInterval(getConfigAs(AccountConfiguration.class).userRefreshInterval, 15, 600);
+        return getConfigAs(AccountConfiguration.class).userRefreshIntervalSeconds();
     }
 
     private void handlePollFailure(String what, ApiException e) {
@@ -205,17 +247,20 @@ public class AccountHandler extends BaseBridgeHandler {
             logger.debug("Unauthorized during {} poll, forcing reconnect", what);
             updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR,
                     "@text/account.status.auth-expired");
-            scheduleReconnect(getConfigAs(AccountConfiguration.class));
+            scheduleReconnect(getConfigAs(AccountConfiguration.class), connectionGeneration);
         } else {
             logger.debug("{} poll failed: {}", what, e.getMessage());
             updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR, e.getMessage());
         }
     }
 
-    private synchronized void scheduleReconnect(AccountConfiguration config) {
+    private synchronized void scheduleReconnect(AccountConfiguration config, long generation) {
+        if (!isCurrentConnection(generation)) {
+            return;
+        }
         cancelReconnect();
         reconnectJob = scheduler.schedule(() -> {
-            if (getThing().getStatus() != ThingStatus.REMOVING) {
+            if (isCurrentConnection(generation) && getThing().getStatus() != ThingStatus.REMOVING) {
                 logger.debug("Retrying Eight Sleep connection");
                 connect(config);
             }
@@ -234,8 +279,9 @@ public class AccountHandler extends BaseBridgeHandler {
     public void dispose() {
         // Invalidate any poll callback still in flight before cancelling the jobs:
         // a task already running sees the new generation and drops its result.
+        disposed = true;
+        resetConnection();
         cancelReconnect();
-        stopPolling();
         super.dispose();
     }
 
@@ -246,11 +292,12 @@ public class AccountHandler extends BaseBridgeHandler {
         // the next reactivation: rebuild clients and restart the poll jobs.
         AccountConfiguration config = getConfigAs(AccountConfiguration.class);
         if (config.username.isBlank() || config.password.isBlank()) {
-            stopPolling();
+            resetConnection();
             updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.CONFIGURATION_ERROR,
                     "@text/account.status.missing-credentials");
             return;
         }
+        resetConnection();
         scheduler.execute(() -> connect(config));
     }
 
@@ -348,7 +395,38 @@ public class AccountHandler extends BaseBridgeHandler {
      * Returns the temperature unit as "c"/"f" based on the bridge configuration.
      */
     public char getTemperatureUnit(char fallback) {
-        return AccountConfigParser.parseTemperatureUnit(getConfigAs(AccountConfiguration.class).temperatureUnit,
-                fallback);
+        return getConfigAs(AccountConfiguration.class).temperatureUnit(fallback);
+    }
+
+    private synchronized long beginConnectionAttempt() {
+        cancelReconnect();
+        stopPolling();
+        service = null;
+        deviceId = null;
+        deviceState = null;
+        return ++connectionGeneration;
+    }
+
+    private synchronized boolean isCurrentConnection(long generation) {
+        return !disposed && generation == connectionGeneration;
+    }
+
+    private synchronized boolean activateConnection(long generation, AccountConfiguration config,
+            EightSleepService service, String deviceId) {
+        if (!isCurrentConnection(generation)) {
+            return false;
+        }
+        this.service = service;
+        this.deviceId = deviceId;
+        startPolling(config, service, deviceId);
+        return true;
+    }
+
+    private synchronized void resetConnection() {
+        connectionGeneration++;
+        stopPolling();
+        service = null;
+        deviceId = null;
+        deviceState = null;
     }
 }

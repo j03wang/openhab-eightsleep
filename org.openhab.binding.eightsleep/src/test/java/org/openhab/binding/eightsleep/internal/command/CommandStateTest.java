@@ -18,6 +18,10 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.junit.Test;
 
@@ -29,9 +33,11 @@ import org.junit.Test;
 @NonNullByDefault
 public class CommandStateTest {
 
+    private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-08-28T12:00:00Z"), ZoneOffset.UTC);
+
     @Test
     public void recordsAndRetiresChannelsAndAlarms() {
-        CommandState state = new CommandState();
+        CommandState state = new CommandState(CLOCK);
 
         state.recordChannel("sidePower", true);
         var channel = state.channel("sidePower");
@@ -50,7 +56,7 @@ public class CommandStateTest {
 
     @Test
     public void retainsLastKnownTargetLevel() {
-        CommandState state = new CommandState();
+        CommandState state = new CommandState(CLOCK);
         assertNull(state.lastKnownTargetLevel());
         state.setLastKnownTargetLevel(-32);
         assertEquals(Double.valueOf(-32), state.lastKnownTargetLevel());

@@ -29,13 +29,13 @@ import org.openhab.binding.eightsleep.internal.model.BaseState;
 import org.openhab.binding.eightsleep.internal.model.BedSide;
 import org.openhab.binding.eightsleep.internal.model.DeviceAssignments;
 import org.openhab.binding.eightsleep.internal.model.DeviceState;
-import org.openhab.binding.eightsleep.internal.model.PillowEntry;
 import org.openhab.binding.eightsleep.internal.model.PillowState;
+import org.openhab.binding.eightsleep.internal.model.PillowState.PillowEntry;
 import org.openhab.binding.eightsleep.internal.model.PlayerState;
 import org.openhab.binding.eightsleep.internal.model.TemperatureState;
 import org.openhab.binding.eightsleep.internal.model.TrendData;
-import org.openhab.binding.eightsleep.internal.model.UserCurrentDevice;
 import org.openhab.binding.eightsleep.internal.model.UserProfile;
+import org.openhab.binding.eightsleep.internal.model.UserProfile.UserCurrentDevice;
 
 import com.google.gson.JsonElement;
 

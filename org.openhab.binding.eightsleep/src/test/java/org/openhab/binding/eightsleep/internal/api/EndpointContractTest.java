@@ -31,8 +31,8 @@ import org.openhab.binding.eightsleep.internal.model.Alarm;
 import org.openhab.binding.eightsleep.internal.model.BedSide;
 import org.openhab.binding.eightsleep.internal.model.DeviceAssignments;
 import org.openhab.binding.eightsleep.internal.model.DeviceState;
-import org.openhab.binding.eightsleep.internal.model.PillowEntry;
 import org.openhab.binding.eightsleep.internal.model.PillowState;
+import org.openhab.binding.eightsleep.internal.model.PillowState.PillowEntry;
 
 /**
  * Spec-first contract tests for every Eight Sleep endpoint the binding consumes.
@@ -89,7 +89,7 @@ public class EndpointContractTest {
     @Test
     public void authRequestSerializesSnakeCase() {
         TokenManager.AuthRequest request = TokenManager.AuthRequest.of("cid", "secret", "me@x.com", "pw");
-        String json = GsonHelper.toJson(request);
+        String json = new ApiJsonCodec().toJson(request);
         assertNotNull(json);
         assertTrue("must use grant_type", json.contains("\"grant_type\":\"password\""));
         assertTrue("must use client_id", json.contains("\"client_id\":\"cid\""));

@@ -14,10 +14,22 @@ package org.openhab.binding.eightsleep.internal;
 
 import static org.openhab.binding.eightsleep.internal.EightSleepBindingConstants.*;
 
+import java.time.Clock;
+
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
+import org.openhab.binding.eightsleep.internal.api.ApiHttpClient;
+import org.openhab.binding.eightsleep.internal.api.ApiJsonCodec;
+import org.openhab.binding.eightsleep.internal.api.EightSleepApiClient;
+import org.openhab.binding.eightsleep.internal.api.EightSleepService;
+import org.openhab.binding.eightsleep.internal.api.TokenManager;
+import org.openhab.binding.eightsleep.internal.command.BedSideCommands;
+import org.openhab.binding.eightsleep.internal.config.AccountConfiguration;
 import org.openhab.binding.eightsleep.internal.handler.AccountHandler;
+import org.openhab.binding.eightsleep.internal.handler.AccountHandler.AccountConnection;
+import org.openhab.binding.eightsleep.internal.handler.AccountHandler.AccountConnectionFactory;
 import org.openhab.binding.eightsleep.internal.handler.BedSideHandler;
+import org.openhab.binding.eightsleep.internal.sync.BedSideChannelSync;
 import org.openhab.core.i18n.TimeZoneProvider;
 import org.openhab.core.thing.Bridge;
 import org.openhab.core.thing.Thing;
@@ -40,10 +52,20 @@ import org.osgi.service.component.annotations.Reference;
 public class EightSleepHandlerFactory extends BaseThingHandlerFactory {
 
     private final TimeZoneProvider timeZoneProvider;
+    private final Clock clock;
+    private final AccountConnectionFactory connectionFactory;
+    private final BedSideCommands commands;
+    private final BedSideChannelSync channelSync;
 
     @Activate
     public EightSleepHandlerFactory(final @Reference TimeZoneProvider timeZoneProvider) {
         this.timeZoneProvider = timeZoneProvider;
+        clock = Clock.systemUTC();
+        ApiJsonCodec jsonCodec = new ApiJsonCodec();
+        ApiHttpClient transport = new ApiHttpClient(jsonCodec);
+        connectionFactory = config -> createConnection(config, transport, jsonCodec, clock);
+        commands = new BedSideCommands(clock);
+        channelSync = new BedSideChannelSync();
     }
 
     @Override
@@ -56,11 +78,19 @@ public class EightSleepHandlerFactory extends BaseThingHandlerFactory {
         ThingTypeUID thingTypeUID = thing.getThingTypeUID();
 
         if (THING_TYPE_UID_ACCOUNT.equals(thingTypeUID)) {
-            return new AccountHandler((Bridge) thing);
+            return new AccountHandler((Bridge) thing, connectionFactory);
         }
         if (THING_TYPE_UID_BED_SIDE.equals(thingTypeUID)) {
-            return new BedSideHandler(thing, timeZoneProvider);
+            return new BedSideHandler(thing, timeZoneProvider, clock, commands, channelSync);
         }
         return null;
+    }
+
+    private static AccountConnection createConnection(AccountConfiguration config, ApiHttpClient transport,
+            ApiJsonCodec jsonCodec, Clock clock) {
+        TokenManager tokenManager = new TokenManager(config.username, config.password, config.clientIdOrNull(),
+                config.clientSecretOrNull(), transport, clock, jsonCodec);
+        EightSleepApiClient client = new EightSleepApiClient(tokenManager, transport, jsonCodec);
+        return new AccountConnection(tokenManager, new EightSleepService(client));
     }
 }

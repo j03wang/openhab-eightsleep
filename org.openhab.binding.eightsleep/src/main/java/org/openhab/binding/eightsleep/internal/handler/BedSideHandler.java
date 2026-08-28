@@ -14,7 +14,7 @@ package org.openhab.binding.eightsleep.internal.handler;
 
 import static org.openhab.binding.eightsleep.internal.EightSleepBindingConstants.*;
 
-import java.time.Instant;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -23,7 +23,6 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 import org.openhab.binding.eightsleep.internal.alarm.AlarmSelector;
 import org.openhab.binding.eightsleep.internal.api.EightSleepService;
-import org.openhab.binding.eightsleep.internal.command.BedSideCommandDispatcher;
 import org.openhab.binding.eightsleep.internal.command.BedSideCommands;
 import org.openhab.binding.eightsleep.internal.command.CommandState;
 import org.openhab.binding.eightsleep.internal.config.BedSideConfiguration;
@@ -32,9 +31,9 @@ import org.openhab.binding.eightsleep.internal.model.BedSide;
 import org.openhab.binding.eightsleep.internal.model.DeviceState;
 import org.openhab.binding.eightsleep.internal.polling.UserDataSnapshot;
 import org.openhab.binding.eightsleep.internal.sync.BedSideChannelSync;
-import org.openhab.binding.eightsleep.internal.sync.ChannelUpdate;
 import org.openhab.binding.eightsleep.internal.sync.LastWriteWins;
 import org.openhab.binding.eightsleep.internal.sync.SyncResult;
+import org.openhab.binding.eightsleep.internal.sync.SyncResult.ChannelUpdate;
 import org.openhab.core.i18n.TimeZoneProvider;
 import org.openhab.core.thing.Bridge;
 import org.openhab.core.thing.ChannelUID;
@@ -60,6 +59,9 @@ public class BedSideHandler extends BaseThingHandler {
 
     private final Logger logger = LoggerFactory.getLogger(BedSideHandler.class);
     private final TimeZoneProvider timeZoneProvider;
+    private final Clock clock;
+    private final BedSideCommands commands;
+    private final BedSideChannelSync channelSync;
 
     private @Nullable ScheduledFuture<?> refreshJob;
     private String userId = "";
@@ -71,7 +73,7 @@ public class BedSideHandler extends BaseThingHandler {
      * merging against polled data: whichever was observed more recently wins. Entries
      * are never expired - a fresh poll simply arrives with a newer timestamp.
      */
-    private final CommandState commandState = new CommandState();
+    private final CommandState commandState;
 
     private boolean syncStartedLogged;
     private final java.util.List<String> syncNotes = new ArrayList<>();
@@ -83,9 +85,23 @@ public class BedSideHandler extends BaseThingHandler {
         syncNotes.add(label + "=" + (value == null ? "<null>" : value));
     }
 
-    public BedSideHandler(Thing thing, TimeZoneProvider timeZoneProvider) {
+    /**
+     * Creates a bed-side handler with injectable command and synchronization collaborators.
+     *
+     * @param thing the bed-side thing
+     * @param timeZoneProvider the openHAB time-zone provider
+     * @param clock the clock used for command and synchronization timestamps
+     * @param commands the command dispatcher
+     * @param channelSync the channel synchronization collaborator
+     */
+    public BedSideHandler(Thing thing, TimeZoneProvider timeZoneProvider, Clock clock, BedSideCommands commands,
+            BedSideChannelSync channelSync) {
         super(thing);
         this.timeZoneProvider = timeZoneProvider;
+        this.clock = clock;
+        this.commands = commands;
+        this.channelSync = channelSync;
+        commandState = new CommandState(clock);
     }
 
     @Override
@@ -231,11 +247,11 @@ public class BedSideHandler extends BaseThingHandler {
         }
 
         BedSideCommands.Context ctx = new BedSideCommands.Context(service, userId, side,
-                account.getTemperatureUnit('c') == 'f', account.getDeviceId(), account.getUserSnapshot(userId),
-                commandState, () -> scheduleRefresh());
+                account.getTemperatureUnit('c') == 'f', timeZoneProvider.getTimeZone(), account.getDeviceId(),
+                account.getUserSnapshot(userId), commandState, () -> scheduleRefresh());
 
         try {
-            BedSideCommandDispatcher.dispatch(channelUID, command, ctx);
+            commands.dispatch(channelUID, command, ctx);
         } catch (Exception e) {
             logger.warn("Failed to execute command {} on {}: {}", command, channelUID, e.getMessage());
         }
@@ -276,8 +292,8 @@ public class BedSideHandler extends BaseThingHandler {
 
         SyncResult result;
         try {
-            result = BedSideChannelSync.compute(deviceState, userData, side, account.getTemperatureUnit('c') == 'f',
-                    account.userRefreshIntervalSeconds(), Instant.now(), java.time.ZoneId.systemDefault(),
+            result = channelSync.compute(deviceState, userData, side, account.getTemperatureUnit('c') == 'f',
+                    account.userRefreshIntervalSeconds(), clock.instant(), timeZoneProvider.getTimeZone(),
                     commandState.channel(CHANNEL_SIDE_POWER), alarmEnabledCommandStamp(account),
                     commandState.channel(CHANNEL_AWAY_MODE), commandState.lastKnownTargetLevel());
         } catch (RuntimeException e) {
@@ -350,8 +366,8 @@ public class BedSideHandler extends BaseThingHandler {
         if (userData == null) {
             return null;
         }
-        Alarm nextAlarm = AlarmSelector.findTargetAlarm(userData.alarms(), Instant.now(),
-                java.time.ZoneId.systemDefault());
+        Alarm nextAlarm = AlarmSelector.findTargetAlarm(userData.alarms(), clock.instant(),
+                timeZoneProvider.getTimeZone());
         return nextAlarm != null && nextAlarm.id() != null ? commandState.alarm(nextAlarm.id()) : null;
     }
 

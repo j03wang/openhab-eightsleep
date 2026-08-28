@@ -22,4 +22,10 @@ import org.eclipse.jdt.annotation.Nullable;
  */
 @NonNullByDefault
 public record UserProfile(String userId, @Nullable UserCurrentDevice currentDevice) {
+
+    /**
+     * Current device assignment of a user profile.
+     */
+    public record UserCurrentDevice(@Nullable BedSide side, @Nullable String deviceId) {
+    }
 }

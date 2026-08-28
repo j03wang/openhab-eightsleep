@@ -40,7 +40,7 @@ public class RegressionTest {
     @Test
     public void authBodyUsesOAuthSnakeCase() {
         TokenManager.AuthRequest request = TokenManager.AuthRequest.of("cid", "sec", "me@x.com", "pw");
-        String json = GsonHelper.toJson(request);
+        String json = new ApiJsonCodec().toJson(request);
         assertTrue(json.contains("\"grant_type\":\"password\""));
         assertTrue(json.contains("\"client_id\":\"cid\""));
         assertFalse("camelCase leak", json.contains("grantType") || json.contains("clientId"));

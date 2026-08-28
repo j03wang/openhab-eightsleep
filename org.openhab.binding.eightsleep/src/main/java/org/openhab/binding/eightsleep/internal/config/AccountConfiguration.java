@@ -13,6 +13,7 @@
 package org.openhab.binding.eightsleep.internal.config;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
+import org.eclipse.jdt.annotation.Nullable;
 
 /**
  * Configuration for the {@code account} bridge thing.
@@ -55,4 +56,48 @@ public class AccountConfiguration {
      * more than one pod should set this explicitly.
      */
     public String deviceId = "";
+
+    /** Returns the optional client id, normalized to {@code null} when blank. */
+    public @Nullable String clientIdOrNull() {
+        return emptyToNull(clientId);
+    }
+
+    /** Returns the optional client secret, normalized to {@code null} when blank. */
+    public @Nullable String clientSecretOrNull() {
+        return emptyToNull(clientSecret);
+    }
+
+    /** Returns the device polling interval within supported bounds. */
+    public long deviceRefreshIntervalSeconds() {
+        return clamp(deviceRefreshInterval, 15, 600);
+    }
+
+    /** Returns the user polling interval within supported bounds. */
+    public long userRefreshIntervalSeconds() {
+        return clamp(userRefreshInterval, 15, 600);
+    }
+
+    /** Returns the base polling interval within supported bounds. */
+    public long baseRefreshIntervalSeconds() {
+        return clamp(baseRefreshInterval, 30, 900);
+    }
+
+    /** Returns the configured temperature unit, or the supplied fallback. */
+    public char temperatureUnit(char fallback) {
+        if (!temperatureUnit.isBlank()) {
+            char first = Character.toLowerCase(temperatureUnit.trim().charAt(0));
+            if (first == 'c' || first == 'f') {
+                return first;
+            }
+        }
+        return fallback;
+    }
+
+    private static long clamp(long value, long min, long max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    private static @Nullable String emptyToNull(@Nullable String value) {
+        return value != null && !value.isBlank() ? value : null;
+    }
 }
