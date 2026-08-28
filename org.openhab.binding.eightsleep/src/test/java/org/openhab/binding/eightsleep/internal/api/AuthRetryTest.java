@@ -16,9 +16,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
-import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
@@ -33,7 +31,6 @@ import org.junit.Test;
  */
 @NonNullByDefault
 public class AuthRetryTest {
-
 
     private static TokenManager managerWithToken() {
         return new TokenManager("me@x.com", "pw", null, null,
@@ -52,13 +49,10 @@ public class AuthRetryTest {
         transport.enqueueSuccess("{\"currentState\":{\"type\":\"smart\"}}");
         EightSleepApiClient client = new EightSleepApiClient(managerWithToken(), transport);
 
-        assertEquals("smart",
-                join(client.getTemperature("u1")).getAsJsonObject("currentState").get("type").getAsString());
+        assertEquals("smart", join(client.getTemperature("u1")).currentState.type);
         assertEquals(2, transport.requests.size());
-        assertTrue("first attempt uses cached token",
-                transport.requests.get(0).endsWith("token=tok"));
-        assertTrue("retry also carries a (refreshed) token",
-                transport.requests.get(1).endsWith("token=tok"));
+        assertTrue("first attempt uses cached token", transport.requests.get(0).endsWith("token=tok"));
+        assertTrue("retry also carries a (refreshed) token", transport.requests.get(1).endsWith("token=tok"));
     }
 
     @Test
@@ -127,7 +121,7 @@ public class AuthRetryTest {
         transport.enqueueSuccess("");
         EightSleepApiClient client = new EightSleepApiClient(managerWithToken(), transport);
 
-        join(client.turnOffSide("u1"));
+        join(new EightSleepService(client).turnOffSide("u1"));
         assertEquals(1, transport.requests.size());
         assertTrue(transport.requests.get(0).startsWith("PUT "));
     }

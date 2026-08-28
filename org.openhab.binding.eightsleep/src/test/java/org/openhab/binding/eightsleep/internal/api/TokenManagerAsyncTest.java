@@ -20,7 +20,6 @@ import static org.junit.Assert.assertTrue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.junit.Test;
@@ -63,8 +62,8 @@ public class TokenManagerAsyncTest {
     }
 
     private static String authJson(String token, double expiresInSeconds, String userId) {
-        return "{\"access_token\":\"" + token + "\",\"expires_in\":" + expiresInSeconds
-                + ",\"user_id\":\"" + userId + "\"}";
+        return "{\"access_token\":\"" + token + "\",\"expires_in\":" + expiresInSeconds + ",\"user_id\":\"" + userId
+                + "\"}";
     }
 
     @Test
@@ -110,8 +109,7 @@ public class TokenManagerAsyncTest {
     @Test
     public void concurrentAsyncCallersShareOneRefresh() throws Exception {
         CompletableFuture<String> slowAuth = new CompletableFuture<>();
-        TokenManager manager = new TokenManager("me@x.com", "pw", null, null,
-                (cid, cs, u, p) -> slowAuth);
+        TokenManager manager = new TokenManager("me@x.com", "pw", null, null, (cid, cs, u, p) -> slowAuth);
 
         CompletableFuture<String> first = manager.getAccessTokenAsync();
         CompletableFuture<String> second = manager.getAccessTokenAsync();

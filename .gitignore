@@ -9,3 +9,9 @@ target/
 .classpath
 .project
 dependency-reduced-pom.xml
+api-session.json
+.api-session.json
+.api-probe-results.json
+__pycache__/
+
+.factorypath

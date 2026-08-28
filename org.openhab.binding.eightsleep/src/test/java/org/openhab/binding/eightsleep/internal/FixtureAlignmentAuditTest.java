@@ -42,7 +42,8 @@ public class FixtureAlignmentAuditTest {
 
     private static final Path MODULE_DIR = Path.of(".").toAbsolutePath().normalize();
     private static final Path FIXTURE_DIR = MODULE_DIR.getParent() != null
-            ? MODULE_DIR.getParent().resolve("tools").resolve("fixtures") : null;
+            ? MODULE_DIR.getParent().resolve("tools").resolve("fixtures")
+            : null;
     private static final Path CONTRACT_TEST = MODULE_DIR
             .resolve("src/test/java/org/openhab/binding/eightsleep/internal/api/EndpointContractTest.java");
 
@@ -85,12 +86,10 @@ public class FixtureAlignmentAuditTest {
         try (Stream<Path> files = Files.list(FIXTURE_DIR)) {
             for (Path file : files.filter(p -> p.toString().endsWith(".json")).toList()) {
                 String stem = file.getFileName().toString().replace(".json", "");
-                if (consumed.contains(stem) || REFERENCE_ONLY.contains(stem)
-                        || matchesConsumedBase(stem, consumed)) {
+                if (consumed.contains(stem) || REFERENCE_ONLY.contains(stem) || matchesConsumedBase(stem, consumed)) {
                     continue;
                 }
-                problems.append("captured fixture '").append(stem)
-                        .append("' is not consumed by any contract test\n");
+                problems.append("captured fixture '").append(stem).append("' is not consumed by any contract test\n");
             }
         }
 

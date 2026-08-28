@@ -12,8 +12,6 @@
  */
 package org.openhab.binding.eightsleep.internal.discovery;
 
-
-import org.openhab.binding.eightsleep.internal.api.model.UserProfileResult;
 import static org.openhab.binding.eightsleep.internal.EightSleepBindingConstants.*;
 
 import java.util.HashMap;
@@ -22,13 +20,13 @@ import java.util.Set;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
-import org.openhab.binding.eightsleep.internal.api.EightSleepApiClient;
+import org.openhab.binding.eightsleep.internal.api.EightSleepService;
 import org.openhab.binding.eightsleep.internal.handler.AccountHandler;
+import org.openhab.binding.eightsleep.internal.model.UserProfile;
 import org.openhab.core.config.discovery.AbstractDiscoveryService;
 import org.openhab.core.config.discovery.DiscoveryResult;
 import org.openhab.core.config.discovery.DiscoveryResultBuilder;
 import org.openhab.core.thing.ThingStatus;
-import org.openhab.core.thing.ThingTypeUID;
 import org.openhab.core.thing.ThingUID;
 import org.openhab.core.thing.binding.ThingHandler;
 import org.openhab.core.thing.binding.ThingHandlerService;
@@ -80,27 +78,25 @@ public class BedSideDiscoveryService extends AbstractDiscoveryService implements
             stopScan();
             return;
         }
-        EightSleepApiClient client = account.getApiClient();
+        EightSleepService service = account.getService();
         String deviceId = account.getDeviceId();
-        if (client == null || deviceId == null) {
-            LOGGER.warn("Account bridge has no API client/device id yet; scan skipped");
+        if (service == null || deviceId == null) {
+            LOGGER.warn("Account bridge has no API service/device id yet; scan skipped");
             stopScan();
             return;
         }
 
-
         // label lookup and profile fan-out are composed, not nested: each stage
         // logs its own failure and the scan simply ends when either fails.
-        client.getHouseholdDevices()
-            .thenApply(devices -> devices.getOrDefault(deviceId, deviceId))
-            .thenCompose(deviceLabel -> client.getUserProfileForDevice(deviceId)
-                .thenApply(profiles -> Map.entry(deviceLabel, profiles)))
-            .thenAccept(labelAndProfiles ->
-                publishResults(account, labelAndProfiles.getKey(), labelAndProfiles.getValue()))
-            .exceptionally(ex -> {
-                LOGGER.debug("Device discovery failed: {}", message(ex));
-                return null;
-            });
+        service.getHouseholdDevices().thenApply(devices -> devices.getOrDefault(deviceId, deviceId))
+                .thenCompose(deviceLabel -> service.getUserProfileForDevice(deviceId)
+                        .thenApply(profiles -> Map.entry(deviceLabel, profiles)))
+                .thenAccept(labelAndProfiles -> publishResults(account, labelAndProfiles.getKey(),
+                        labelAndProfiles.getValue()))
+                .exceptionally(ex -> {
+                    LOGGER.debug("Device discovery failed: {}", message(ex));
+                    return null;
+                });
     }
 
     private static String message(Throwable ex) {
@@ -109,10 +105,9 @@ public class BedSideDiscoveryService extends AbstractDiscoveryService implements
     }
 
     /** Publishes one discovery result per discovered user profile. */
-    private void publishResults(AccountHandler account, String deviceLabel,
-            java.util.List<UserProfileResult> profiles) {
+    private void publishResults(AccountHandler account, String deviceLabel, java.util.List<UserProfile> profiles) {
         LOGGER.debug("Eight Sleep discovery: found {} user(s) for device {}", profiles.size(), account.getDeviceId());
-        for (UserProfileResult profile : profiles) {
+        for (UserProfile profile : profiles) {
             DiscoveryResult result = buildDiscoveryResult(account.getThing().getUID(), deviceLabel, profile);
             if (result != null) {
                 thingDiscovered(result);
@@ -122,12 +117,14 @@ public class BedSideDiscoveryService extends AbstractDiscoveryService implements
 
     /** Visible for tests. */
     static org.openhab.core.config.discovery.DiscoveryResult buildDiscoveryResult(ThingUID bridgeUID,
-            String deviceLabel, UserProfileResult profile) {
+            String deviceLabel, UserProfile profile) {
         String userId = profile.userId();
         if (userId == null) {
             return null;
         }
-        String side = normalizeSide(profile.currentDevice() != null ? profile.currentDevice().side : null);
+        String side = normalizeSide(profile.currentDevice() != null && profile.currentDevice().side() != null
+                ? profile.currentDevice().side().apiValue()
+                : null);
         String sanitizedUserId = sanitizeForThingId(userId);
         // The (type, bridgeUID, id) overload yields ...:bedSide:<bridgeId>:<userId>,
         // keeping the user id as the last segment.
@@ -143,9 +140,8 @@ public class BedSideDiscoveryService extends AbstractDiscoveryService implements
             default -> "Both";
         } + ") - " + deviceLabel;
 
-        return DiscoveryResultBuilder.create(thingUid)
-                .withProperties(properties).withRepresentationProperty(CONFIG_USER_ID)
-                .withBridge(bridgeUID).withLabel(label).build();
+        return DiscoveryResultBuilder.create(thingUid).withProperties(properties)
+                .withRepresentationProperty(CONFIG_USER_ID).withBridge(bridgeUID).withLabel(label).build();
     }
 
     /**

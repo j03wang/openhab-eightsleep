@@ -8,7 +8,8 @@
 	<bridge-type id="account">
 		<label>Eight Sleep Account</label>
 		<description>An Eight Sleep cloud account. Each account bridge handles one Eight Sleep login and polls the
-		 Eight Sleep cloud API for device and sleep data.</description>
+			Eight Sleep
+			cloud API for device and sleep data.</description>
 		<semantic-equipment-tag>NetworkAppliance</semantic-equipment-tag>
 		<representation-property>username</representation-property>
 		<config-description>
@@ -26,14 +27,14 @@
 				<label>Client ID</label>
 				<advanced>true</advanced>
 				<description>Optional OAuth client id override. Leave empty to use the client id of the official
-				 mobile app.</description>
+					mobile app.</description>
 			</parameter>
 			<parameter name="clientSecret" type="text" required="false">
 				<label>Client Secret</label>
 				<context>password</context>
 				<advanced>true</advanced>
 				<description>Optional OAuth client secret override. Leave empty to use the client secret of the
-				 official mobile app.</description>
+					official mobile app.</description>
 			</parameter>
 			<parameter name="deviceRefreshInterval" type="integer" required="false">
 				<label>Device Refresh Interval</label>
@@ -60,14 +61,16 @@
 					<option value="F">Fahrenheit</option>
 				</options>
 				<description>Unit used to interpret plain number commands for temperatures. Leave empty to use
-				 Celsius. Quantity commands always carry their own unit.</description>
+					Celsius. Quantity
+					commands always carry their own unit.</description>
 			</parameter>
 			<parameter name="deviceId" type="text" required="false">
 				<label>Device ID</label>
 				<advanced>true</advanced>
 				<description>The Eight Sleep device (pod) to bind. Leave empty to use the first device of the
-				 account; set it when your account has more than one pod. Discovered devices are listed in the
-				 thing properties.</description>
+					account; set it when
+					your account has more than one pod. Discovered devices are listed in the
+					thing properties.</description>
 			</parameter>
 		</config-description>
 	</bridge-type>
@@ -79,7 +82,8 @@
 		</supported-bridge-type-refs>
 		<label>Bed Side</label>
 		<description>A single side of an Eight Sleep smart mattress: sleep metrics, temperature control, base control
-		 and alarms of one sleeper.</description>
+			and
+			alarms of one sleeper.</description>
 		<category>Sensor</category>
 		<semantic-equipment-tag>Bed</semantic-equipment-tag>
 
@@ -101,7 +105,7 @@
 			<parameter name="userId" type="text" required="true">
 				<label>User ID</label>
 				<description>The Eight Sleep user id of the sleeper on this bed side. Populated automatically by
-				 discovery.</description>
+					discovery.</description>
 			</parameter>
 			<parameter name="label" type="text" required="false">
 				<label>Side</label>
@@ -112,8 +116,9 @@
 					<option value="solo">Both (solo)</option>
 				</options>
 				<description>The physical side this user sleeps on. Choose "Both (solo)" when one user controls the
-				 whole mattress; data is read from the left zone, which is the only zone populated for solo beds.
-				 Leave empty to default to Left.</description>
+					whole mattress;
+					data is read from the left zone, which is the only zone populated for solo beds.
+					Leave empty to default to Left.</description>
 			</parameter>
 		</config-description>
 	</thing-type>
@@ -184,7 +189,8 @@
 	<channel-group-type id="baseControl">
 		<label>Adjustable Base</label>
 		<description>Controls and sensors of an optional Eight Sleep adjustable base. Only available when a base is
-		 paired with the bed.</description>
+			paired with
+			the bed.</description>
 		<channels>
 			<channel id="preset" typeId="basePreset"/>
 			<channel id="headAngle" typeId="headAngle"/>
@@ -197,7 +203,7 @@
 	<channel-group-type id="pillowControl">
 		<label>Pillow</label>
 		<description>The Pod 5 pillow, which heats and cools independently of the pod. Only populated when a pillow is
-		 reported for this bed side.</description>
+			reported for this bed side.</description>
 		<channels>
 			<channel id="pillowPower" typeId="sidePower"/>
 			<channel id="pillowTargetTemperature" typeId="targetTemperature"/>
@@ -223,7 +229,8 @@
 		<item-type>Number:Temperature</item-type>
 		<label>Target Temperature</label>
 		<description>Target bed temperature. Set it to heat or cool this side. The valid range corresponds to the raw
-		 heating level range -100 to 100 of the Eight Sleep API.</description>
+			heating
+			level range -100 to 100 of the Eight Sleep API.</description>
 		<category>Temperature</category>
 		<tags>
 			<tag>Setpoint</tag>
@@ -337,7 +344,8 @@
 		<item-type>String</item-type>
 		<label>Sleep Stage</label>
 		<description>Current sleep stage (awake, light, deep, rem) derived from the session's stage segments;
-		 "unknown" while no stage data is available.</description>
+			"unknown" while
+			no stage data is available.</description>
 		<tags>
 			<tag>Status</tag>
 		</tags>
@@ -532,8 +540,10 @@
 		<item-type>Switch</item-type>
 		<label>Away Mode</label>
 		<description>ON while this user is in away mode. Turn it on/off to start or end away mode. The state is
-		 UNDEF until the first away-status poll, then reflects what the API reports, so it also flips when away
-		 mode is changed in the Eight Sleep app.</description>
+			UNDEF until the
+			first away-status poll, then reflects what the API reports, so it also flips when away
+			mode is changed in the Eight
+			Sleep app.</description>
 		<tags>
 			<tag>Status</tag>
 			<tag>Presence</tag>
@@ -544,7 +554,8 @@
 		<item-type>Switch</item-type>
 		<label>Start Priming</label>
 		<description>Send ON to start the pod priming procedure. This user receives the completion notification.
-		 Check isPriming for progress.</description>
+			Check
+			isPriming for progress.</description>
 	</channel-type>
 
 </thing:thing-descriptions>

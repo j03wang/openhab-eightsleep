@@ -171,7 +171,7 @@ def main() -> int:
     # ---- per-user data (all users incl. away ones) ----
     user_ids = set()
     try:
-        result = json.loads(open(os.path.join(args.out, "device-users.json")).read())
+        result = json.loads(open(os.path.join(args.out, "device-users.json")).read()).get("result", {})
         user_ids.update({result.get("leftUserId"), result.get("rightUserId")} - {None})
         user_ids.update(v for v in away_sides.values() if v)
     except (json.JSONDecodeError, OSError):

@@ -12,17 +12,14 @@
  */
 package org.openhab.binding.eightsleep.internal.alarm;
 
-
-import org.openhab.binding.eightsleep.internal.api.model.Alarm;
 import java.time.Instant;
-import java.util.List;
 import java.time.ZoneId;
+import java.util.List;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
-import org.openhab.binding.eightsleep.internal.api.EightSleepApiClient;
-import org.openhab.binding.eightsleep.internal.handler.AccountHandler;
-import org.openhab.binding.eightsleep.internal.model.UserDataCache;
+import org.openhab.binding.eightsleep.internal.model.Alarm;
+import org.openhab.binding.eightsleep.internal.polling.DataFreshness;
 
 /**
  * Selection of the alarm the alarm channels represent: the soonest locally-computed
@@ -43,28 +40,24 @@ public final class AlarmSelector {
     /**
      * Selects the target alarm using the system zone (production path).
      */
-    public static @Nullable Alarm findTargetAlarm(UserDataCache userData,
-            Instant now) {
-        return findTargetAlarm(userData, now, ZoneId.systemDefault());
+    public static @Nullable Alarm findTargetAlarm(List<Alarm> alarms, Instant now) {
+        return findTargetAlarm(alarms, now, ZoneId.systemDefault());
     }
 
     /**
      * As above with an explicit zone - production uses the system zone, tests inject
      * a fixed zone so they cannot depend on where they run.
      */
-    public static @Nullable Alarm findTargetAlarm(UserDataCache userData,
-            Instant now, ZoneId zone) {
+    public static @Nullable Alarm findTargetAlarm(List<Alarm> alarms, Instant now, ZoneId zone) {
         Alarm target = null;
         Instant targetRun = null;
-        for (Alarm alarm : userData.alarms) {
+        for (Alarm alarm : alarms) {
             Instant run = alarm.computeNextRun(zone, now);
             if (run == null) {
                 continue;
             }
-            boolean closer = targetRun == null || run.isBefore(targetRun)
-                    || (run.equals(targetRun) && target != null
-                            && alarm.id != null
-                            && (target.id == null || alarm.id.compareTo(target.id) < 0));
+            boolean closer = targetRun == null || run.isBefore(targetRun) || (run.equals(targetRun) && target != null
+                    && alarm.id() != null && (target.id() == null || alarm.id().compareTo(target.id()) < 0));
             if (closer) {
                 target = alarm;
                 targetRun = run;
@@ -83,7 +76,6 @@ public final class AlarmSelector {
         if (nextAlarmPresent) {
             return false;
         }
-        return alarmCount > 0 || !org.openhab.binding.eightsleep.internal.sleep.DataFreshness.isStale(
-                alarmsPolledAt, now, userIntervalSeconds);
+        return alarmCount > 0 || !DataFreshness.isStale(alarmsPolledAt, now, userIntervalSeconds);
     }
 }

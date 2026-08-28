@@ -49,7 +49,8 @@ public class I18nConfigAuditTest {
     private static final Path MODULE_DIR = Path.of(".");
     private static final Path THING_XML = MODULE_DIR.resolve("src/main/resources/OH-INF/thing/thing-types.xml");
     private static final Path PROPERTIES = MODULE_DIR.resolve("src/main/resources/OH-INF/i18n/eightsleep.properties");
-    private static final Path CONFIG_DIR = MODULE_DIR.resolve("src/main/java/org/openhab/binding/eightsleep/internal/handler");
+    private static final Path CONFIG_DIR = MODULE_DIR
+            .resolve("src/main/java/org/openhab/binding/eightsleep/internal/config");
 
     private static String read(Path path) throws IOException {
         return Files.readString(path, StandardCharsets.UTF_8);
@@ -82,8 +83,8 @@ public class I18nConfigAuditTest {
     /** bridge-type and thing-type sections with their config-description parameters. */
     private static List<ConfigSection> configSections(String xml) {
         List<ConfigSection> sections = new ArrayList<>();
-        Matcher tm = Pattern.compile(
-                "<(bridge|thing)-type id=\"(\\w+)\">(.*?)</\\1-type>", Pattern.DOTALL).matcher(xml);
+        Matcher tm = Pattern.compile("<(bridge|thing)-type id=\"(\\w+)\">(.*?)</\\1-type>", Pattern.DOTALL)
+                .matcher(xml);
         while (tm.find()) {
             sections.add(new ConfigSection(tm.group(1), tm.group(2), tm.group(3)));
         }
@@ -98,10 +99,12 @@ public class I18nConfigAuditTest {
         StringBuilder problems = new StringBuilder();
         try (Stream<Path> files = Files.walk(MODULE_DIR.resolve("src/main/java"))) {
             for (Path file : files.filter(p -> p.toString().endsWith(".java")).toList()) {
-                Matcher m = Pattern.compile("@text/([\\w.\\-]+)").matcher(Files.readString(file, StandardCharsets.UTF_8));
+                Matcher m = Pattern.compile("@text/([\\w.\\-]+)")
+                        .matcher(Files.readString(file, StandardCharsets.UTF_8));
                 while (m.find()) {
                     if (!keys.contains(m.group(1))) {
-                        problems.append(file.getFileName()).append(": missing key @text/").append(m.group(1)).append('\n');
+                        problems.append(file.getFileName()).append(": missing key @text/").append(m.group(1))
+                                .append('\n');
                     }
                 }
             }
@@ -145,8 +148,7 @@ public class I18nConfigAuditTest {
         try (Stream<Path> files = Files.walk(CONFIG_DIR)) {
             for (Path file : files.filter(p -> p.getFileName().toString().endsWith("Configuration.java")).toList()) {
                 String name = file.getFileName().toString().replace("Configuration.java", "").toLowerCase();
-                expectedFields.put(name.equals("account") || name.equals("bedside") ? name : name,
-                        configFields(file));
+                expectedFields.put(name.equals("account") || name.equals("bedside") ? name : name, configFields(file));
             }
         }
         // XML ids vs class name prefixes: account -> AccountConfiguration, bedSide -> BedSideConfiguration

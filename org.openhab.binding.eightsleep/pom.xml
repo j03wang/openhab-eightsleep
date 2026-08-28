@@ -12,7 +12,7 @@
     SPDX-License-Identifier: EPL-2.0
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
 
   <modelVersion>4.0.0</modelVersion>
 
@@ -36,21 +36,6 @@
     <bnd.version>7.1.0</bnd.version>
     <gson.version>2.11.0</gson.version>
   </properties>
-
-  <repositories>
-    <repository>
-      <id>openhab-release</id>
-      <name>openHAB Release Repository</name>
-      <url>https://openhab.jfrog.io/artifactory/libs-release</url>
-      <releases>
-        <enabled>true</enabled>
-        <updatePolicy>never</updatePolicy>
-      </releases>
-      <snapshots>
-        <enabled>false</enabled>
-      </snapshots>
-    </repository>
-  </repositories>
 
   <dependencies>
     <dependency>
@@ -92,6 +77,21 @@
       <scope>test</scope>
     </dependency>
   </dependencies>
+
+  <repositories>
+    <repository>
+      <releases>
+        <enabled>true</enabled>
+        <updatePolicy>never</updatePolicy>
+      </releases>
+      <snapshots>
+        <enabled>false</enabled>
+      </snapshots>
+      <id>openhab-release</id>
+      <name>openHAB Release Repository</name>
+      <url>https://openhab.jfrog.io/artifactory/libs-release</url>
+    </repository>
+  </repositories>
 
   <build>
     <plugins>

@@ -19,10 +19,10 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -54,15 +54,13 @@ public class ChannelUidAuditTest {
             .resolve("src/main/java/org/openhab/binding/eightsleep/internal/EightSleepBindingConstants.java");
     private static final Path HANDLER_DIR = MODULE_DIR
             .resolve("src/main/java/org/openhab/binding/eightsleep/internal/handler");
-    /** Channel publishes also flow through the pure sync resolver. */
     private static final Path SYNC_DIR = MODULE_DIR
-            .resolve("src/main/java/org/openhab/binding/eightsleep/internal");
+            .resolve("src/main/java/org/openhab/binding/eightsleep/internal/sync");
 
     /** group#channel UIDs declared on the bedSide thing type. */
     private static Set<String> declaredUids(String xml) {
         Map<String, String> groupTypeChannels = new HashMap<>();
-        Matcher gtm = Pattern.compile(
-                "<channel-group-type id=\"(\\w+)\">(.*?)</channel-group-type>", Pattern.DOTALL)
+        Matcher gtm = Pattern.compile("<channel-group-type id=\"(\\w+)\">(.*?)</channel-group-type>", Pattern.DOTALL)
                 .matcher(xml);
         while (gtm.find()) {
             Set<String> ids = new LinkedHashSet<>();
@@ -98,13 +96,15 @@ public class ChannelUidAuditTest {
         return map;
     }
 
-    /** All java files under the internal/handler package. */
+    /** All Java files that directly publish or construct channel updates. */
     private Stream<Path> handlerSources() throws IOException {
-        // handler package plus the sync resolver (which now builds the channel states)
-        try (Stream<Path> stream = Files.walk(HANDLER_DIR)) {
-            return stream.filter(p -> p.toString().endsWith(".java"))
-                    .collect(java.util.stream.Collectors.toList()).stream();
+        List<Path> sources = new ArrayList<>();
+        for (Path directory : List.of(HANDLER_DIR, SYNC_DIR)) {
+            try (Stream<Path> stream = Files.walk(directory)) {
+                sources.addAll(stream.filter(p -> p.toString().endsWith(".java")).toList());
+            }
         }
+        return sources.stream();
     }
 
     /**
@@ -115,19 +115,14 @@ public class ChannelUidAuditTest {
     @Test
     public void everyPublishedChannelUidIsDeclared() throws IOException {
         Set<String> declared = declaredUids(Files.readString(THING_XML, StandardCharsets.UTF_8));
-        assertTrue("no channels parsed from thing-types.xml - parser or path broken",
-                declared.size() > 20);
+        assertTrue("no channels parsed from thing-types.xml - parser or path broken", declared.size() > 20);
 
         Map<String, String> constValues = constants();
         StringBuilder problems = new StringBuilder();
         int checked = 0;
 
         try (Stream<Path> files = handlerSources()) {
-            List<Path> all = new ArrayList<>(files.toList());
-            if (Files.exists(SYNC_DIR.resolve("handler/BedSideChannelSync.java"))) {
-                all.add(SYNC_DIR.resolve("handler/BedSideChannelSync.java"));
-            }
-            for (Path file : all) {
+            for (Path file : files.toList()) {
                 String source = Files.readString(file, StandardCharsets.UTF_8);
                 // 1) direct updateState(GROUP_x#CHANNEL_y, ...) calls
                 Matcher m = Pattern.compile(
@@ -141,7 +136,7 @@ public class ChannelUidAuditTest {
 
                 // 2) helper-mediated publishes: putDecimal/putDuration(group, channel, ...)
                 Matcher twoArg = Pattern.compile(
-"(?:putDecimal|putDuration|add|addQuantity)\\(\\s*(?:r\\s*,\\s*)?(GROUP_\\w+)\\s*,\\s*(CHANNEL_\\w+)",
+                        "(?:putDecimal|putDuration|add|addTemperature)\\(\\s*(?:\\w+\\s*,\\s*)?(GROUP_\\w+)\\s*,\\s*(CHANNEL_\\w+)",
                         Pattern.DOTALL).matcher(source);
                 while (twoArg.find()) {
                     checked++;
@@ -150,7 +145,7 @@ public class ChannelUidAuditTest {
 
                 // 3) putLatest/putLatestCelsius(session, "series", group, channel)
                 Matcher fourArg = Pattern.compile(
-"putLatest(?:Celsius)?\\(\\s*(?:r\\s*,\\s*)?\\w+\\s*,\\s*\"[^\"]*\"\\s*,\\s*(GROUP_\\w+)\\s*,\\s*(CHANNEL_\\w+)",
+                        "putLatest(?:Celsius)?\\(\\s*\\w+\\s*,\\s*\\w+\\s*,\\s*\"[^\"]*\"\\s*,\\s*(GROUP_\\w+)\\s*,\\s*(CHANNEL_\\w+)",
                         Pattern.DOTALL).matcher(source);
                 while (fourArg.find()) {
                     checked++;
@@ -171,8 +166,8 @@ public class ChannelUidAuditTest {
         String group = constValues.get(groupConstRaw.replace("GROUP_", ""));
         String chan = constValues.get(chanConstRaw.replace("CHANNEL_", ""));
         if (group == null || chan == null) {
-            problems.append(file.getFileName()).append(": unknown constant in ")
-                    .append(groupConstRaw).append('/').append(chanConstRaw).append('\n');
+            problems.append(file.getFileName()).append(": unknown constant in ").append(groupConstRaw).append('/')
+                    .append(chanConstRaw).append('\n');
             return;
         }
         String uid = group + "#" + chan;
@@ -196,16 +191,14 @@ public class ChannelUidAuditTest {
 
         if (tokens.size() == 1 && tokens.get(0).startsWith("CHANNEL_")) {
             // unprefixed write: the exact silent-drop bug
-            problems.append(file.getFileName()).append(": UNPREFIXED updateState(")
-                    .append(tokens.get(0)).append(")\n");
+            problems.append(file.getFileName()).append(": UNPREFIXED updateState(").append(tokens.get(0)).append(")\n");
             return;
         }
         if (tokens.size() == 2) {
             auditUid(file, tokens.get(0), tokens.get(1), declared, constValues, problems);
             return;
         }
-        problems.append(file.getFileName()).append(": unparseable expression ")
-                .append(expression).append('\n');
+        problems.append(file.getFileName()).append(": unparseable expression ").append(expression).append('\n');
     }
 
     /**
@@ -219,8 +212,8 @@ public class ChannelUidAuditTest {
         Map<String, String> constValues = constants();
 
         Set<String> xmlChannelIds = new HashSet<>();
-        Matcher cm = Pattern.compile("<channel-group-type id=\"(\\w+)\">(.*?)</channel-group-type>",
-                Pattern.DOTALL).matcher(xml);
+        Matcher cm = Pattern.compile("<channel-group-type id=\"(\\w+)\">(.*?)</channel-group-type>", Pattern.DOTALL)
+                .matcher(xml);
         while (cm.find()) {
             Matcher ids = Pattern.compile("<channel id=\"(\\w+)\"").matcher(cm.group(2));
             while (ids.find()) {
@@ -232,7 +225,6 @@ public class ChannelUidAuditTest {
         Set<String> missing = new HashSet<>(xmlChannelIds);
         missing.removeAll(constantIds);
 
-        assertTrue("XML channels without a CHANNEL_ constant: " + missing,
-                constantIds.containsAll(xmlChannelIds));
+        assertTrue("XML channels without a CHANNEL_ constant: " + missing, constantIds.containsAll(xmlChannelIds));
     }
 }

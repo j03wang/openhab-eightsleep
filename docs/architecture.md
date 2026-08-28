@@ -20,7 +20,9 @@ AccountHandler       BedSideHandler     BedSideDiscoveryService
  │      │                                      (pure fn)  │
  │ polls│                                                 │
  ▼      ▼                                                 ▼
- └─► EightSleepApiClient ◄─────────────────────── BedSideCommands
+ └─► EightSleepService ◄───────────────────────── BedSideCommands
+                        │
+              EightSleepApiClient
                         │
              TokenManager (OAuth session)
                         │
@@ -29,7 +31,7 @@ AccountHandler       BedSideHandler     BedSideDiscoveryService
               Eight Sleep cloud APIs
 ```
 
-Flows: AccountPoller polls via the client and writes observations into UserDataCache; BedSideChannelSync reads only caches and decides channel updates; BedSideHandler dispatches each incoming channel command to BedSideCommands, which issues mutations through the client (stamped for last-write-wins reconciliation by sync).
+Flows: AccountPoller polls via the service and writes observations into UserDataCache; BedSideChannelSync reads only caches and decides channel updates; BedSideHandler dispatches each incoming channel command to BedSideCommands, which issues mutations through the service (stamped for last-write-wins reconciliation by sync).
 
 ## 2. Thing model
 
@@ -47,13 +49,17 @@ Flows: AccountPoller polls via the client and writes observations into UserDataC
 
 | Package | Responsibility |
 |---|---|
-| `internal.handler` | Framework-facing handlers (`AccountHandler` bridge, `BedSideHandler` thing), LWW bookkeeping (`LastWriteWins`), command dispatch (`BedSideCommands`), config DTOs |
-| `internal.api` | HTTP client (`ApiHttpClient`), endpoint orchestration (`EightSleepApiClient`), OAuth session (`TokenManager`), typed exceptions (`ApiException`), Gson helpers |
-| `internal.api.model` | Gson response DTOs (`Alarm`, `DeviceUsers`, `PillowData`, `PlayerState`, …); mutable because Gson instantiates reflectively |
-| `internal.polling` | `AccountPoller`: per-user poll fan-out (trends, player, alarms, temperature, pillow) and away-state poll |
-| `internal.model` | Domain parsing/conversion: `TrendParser` (defensive JsonElement walking), `HeatingLevelConversion` (level ⇄ °C/°F), caches (`UserDataCache`), config parsing |
+| `internal.handler` | Thin openHAB lifecycle adapters (`AccountHandler` bridge and `BedSideHandler` thing) |
+| `internal.config` | Thing configuration DTOs and account configuration parsing |
+| `internal.command` | Bed-side command dispatch, command execution context and pending command state |
+| `internal.api` | Domain-facing orchestration and mapping (`EightSleepService`, `EightSleepApiMapper`), contract-only endpoint client (`EightSleepApiClient`), API scalar parsing, HTTP transport, OAuth session and typed exceptions |
+| `internal.api.dto` | Request and response contracts matching the API's JSON payloads |
+| `internal.polling` | Poll scheduling (`AccountPollingCoordinator`), per-user fan-out, mutable caches, immutable snapshots and freshness policy |
+| `internal.sync` | Last-write-wins reconciliation and focused device, sleep, accessory and alarm channel projection |
+| `internal.model` | Immutable mapped domain state, including typed bed sides and temporal values |
+| `internal.temperature` | Heating-level and temperature conversion |
 | `internal.alarm` | `AlarmSelector`: picks the actionable alarm from cached alarms |
-| `internal.sleep` | `SleepSession`, `DataFreshness`: staleness thresholds derived from poll intervals |
+| `internal.sleep` | `SleepSession`: derives sleep stage and bed presence from trend data |
 
 ## 4. Key design decisions
 
@@ -62,54 +68,54 @@ Flows: AccountPoller polls via the client and writes observations into UserDataC
 - `TokenManager` keeps one OAuth token per account bridge, refreshing proactively 120 s before expiry.
 - Token acquisition is **non-blocking**: `getAccessTokenAsync()` composes the refresh; concurrent callers share a single in-flight refresh. The blocking `getAccessToken()` remains only for off-scheduler callers.
 - On HTTP 401 the client invalidates the token and retries **exactly once** (`withAuthRetry`). Subscription-gated endpoints are detected via structured flags on `ApiException` (`isUnauthorized()`, `isSubscriptionRequired()`).
-- Reconnects build **new** `TokenManager`/`EightSleepApiClient` instances; the account poller is rebuilt whenever its bound client/device changes so an obsolete credential context is never reused.
+- Reconnects build **new** `TokenManager`/`EightSleepService`/`EightSleepApiClient` instances; `AccountPollingCoordinator` replaces its poller and invalidates callbacks from the obsolete session.
 
 ### 4.2 Polling model
 
 - All scheduling uses the framework-provided scheduler; no ad-hoc threads.
-- `AccountHandler.startPolling` runs four fixed-delay jobs: device data, per-user data fan-out (`AccountPoller`), base data, away-state.
+- `AccountPollingCoordinator` owns four fixed-delay jobs: device data, per-user data fan-out, base data and away state.
 - Initial data comes from each job's zero-delay first run, keeping one code path for both startup and steady state rather than a separate synchronous first poll.
-- A `lifecycleGeneration` counter invalidates in-flight work: callbacks capture the generation when scheduled and drop results/status updates if it changed (dispose or reconnect). This prevents stale publishes after disposal or a superseded session.
+- A coordinator generation invalidates in-flight work: callbacks capture the generation when scheduled and drop results if it changed. This prevents stale publishes after disposal or a superseded session.
 - Poll failures are expected conditions: DEBUG logs plus Thing status transitions (`OFFLINE(COMMUNICATION_ERROR)`), never warn/error spam.
 
 ### 4.3 Caching & staleness
 
 - `AccountHandler` holds a `UserDataCache` per registered user, reference-counted by bed side things; the last unregister drops the cache.
+- Consumers receive `UserDataSnapshot` values, so one synchronization or command operation never reads a changing cache piecemeal.
 - Freshness is explicit: `DataFreshness` derives staleness thresholds from the configured poll interval (4×). Bed sides go `OFFLINE(COMMUNICATION_ERROR)` on stale data instead of silently showing old values.
 
 ### 4.4 Command path & LWW reconciliation
 
 All mutable channels — side power, alarms, temperature targets and away mode — resolve through one mechanism: `BedSideChannelSync.compute()` compares the cached polled observation against a pending command stamp via `LastWriteWins.resolveLatest`. Each observation carries a timestamp (polls stamp their *start*, commands their issue time); the more recent one wins, with ties going to the polled value. Caches hold raw observations; sync is the sole adjudicator.
 
-- `BedSideCommands` is a static command library dispatching on channel id; every command returns immediately by composing futures (`apply(ctx, stage)` → refresh-on-success hook).
-- Optimistic feedback: side power, alarms and away mode write a timestamped command stamp into the thing's `commanded` map before/as the request goes out, so the merge sees the command even if the HTTP round trip is still in flight.
+- `BedSideCommandDispatcher` keeps channel routing explicit; `BedSideCommands` executes operations using a context of explicit values rather than depending on either handler.
+- Optimistic feedback: side power, alarms and away mode write timestamped stamps into `CommandState` before/as the request goes out, so reconciliation sees the command even if the HTTP round trip is still in flight.
 - Server confirmations retire the corresponding stamps (`retireSidePowerCommand`, `retireAwayModeCommand`, `retireAlarmId`) so pending stamps do not accumulate.
 - Away mode stays `UNDEF` until *this user* has spoken (polled or commanded) — the gate is derived from the cache entry and pending stamp, never global.
 
 ### 4.5 Channel sync as a pure function
 
-`BedSideChannelSync.compute(...)` takes only immutable inputs (caches, config flags, command stamps, clock) and returns a `Result` (status action + channel updates + bookkeeping mutations). The handler applies it. Benefits:
+`BedSideChannelSync.compute(...)` coordinates focused device, sleep, accessory and alarm projectors over an immutable cache snapshot, then returns an immutable `SyncResult`. The handler applies it. Benefits:
 
-- Unit-testable without framework objects (16 sync tests).
+- Unit-testable without framework objects.
 - Deterministic status decisions in one place: `BRIDGE_OFFLINE`, `USER_NOT_FOUND`, `STALE_DATA`, `ONLINE`, `NONE`.
 - Heating-level quirks isolated (`resolveShownTargetLevel`, absent-target detection).
 
 ### 4.6 Error handling & degradation
 
-- Structured JSON everywhere (Gson DTOs; `TrendParser` walks `JsonElement` defensively for heterogeneous trend shapes). No substring matching on bodies except the unavoidable 403 "subscription" classifier.
+- The API client accepts request DTOs and returns response DTOs. The service owns validation, clamping and multi-call orchestration; `EightSleepApiMapper` converts DTOs into immutable domain records. No substring matching on bodies except the unavoidable 403 "subscription" classifier.
 - Optional accessories degrade silently: speaker 404 → speaker-less state; missing pillow payload → no pillow channels; alarm 403 (no subscription) → empty list stamped fresh.
 - Missing external values stay unknown: absent volume/pillow levels surface as `null`, never fabricated zeros.
-- Unparseable device payloads keep `rawFieldNames` for diagnostics.
 
 ## 5. Testing strategy
 
 | Layer | Tests | Approach |
 |---|---|---|
-| Request contract | `ControlOperationsTest`, `AuthRetryTest` | Scripted transports pin URL/method/body/clamping of every control operation |
-| Parser contract | `EndpointContractTest` | Spec-first: upstream expectations evaluated against embedded samples **and** live captures (`tools/fixtures`, `-Deightsleep.fixtures=…`); fixture-derived invariants (alarm round-trips, chronological days, error-body degradation) |
+| Service contract | `EightSleepService*Test`, `AuthRetryTest` | Scripted transports pin orchestration, validation, URL/method/body, and retry behavior |
+| DTO and mapping contract | `EndpointContractTest`, `EightSleepApiMapperTest`, `TrendMappingTest` | Embedded samples and live captures (`tools/fixtures`, `-Deightsleep.fixtures=…`) pin deserialization and domain mapping |
 | Upstream pitfalls | `RegressionTest` | Each test pins a documented pitfall of the Eight Sleep API (snake_case OAuth body, `result` envelope, bare-object alarm updates, integer-only levels) so parsers cannot drift from it |
-| Logic tables | LWW, away ordering, alarm selection, heating conversion | Pure-function truth tables |
-| Lifecycle/race | `PollRaceTest`, `AlarmSelectionRaceTest`, `AccountLwwLogicTest`, `AccountPollerIdentityTest` | Real handlers/logic classes without OSGi runtime |
+| Domain behavior | Model, alarm, sleep, command, polling, and sync package tests | Pure-function truth tables and immutable snapshot behavior |
+| Lifecycle/race | `PollRaceTest`, `AlarmSelectorRegressionTest`, `AccountPollerTest`, `AccountHandlerTest` | Focused lifecycle seams without an OSGi runtime |
 | Audits | `FixtureAlignmentAuditTest`, `ChannelUidAuditTest`, `I18nConfigAuditTest` | Structural consistency (fixtures ↔ tests, channels ↔ XML, i18n keys) |
 
 Fixtures are captured with `tools/capture_fixtures.py`; both modes must pass (embedded samples exercise all parser branches deterministically).

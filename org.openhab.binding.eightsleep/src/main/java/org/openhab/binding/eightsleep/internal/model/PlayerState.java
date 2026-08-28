@@ -16,50 +16,35 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 
 /**
- * Speaker player state as returned by {@code GET /v1/users/{userId}/audio/player}.
+ * Current speaker player state.
  *
  * @author Joe Wang - Initial contribution
  */
 @NonNullByDefault
-public class PlayerState {
+public record PlayerState(@Nullable String state, @Nullable Integer volume, @Nullable Track currentTrack,
+        boolean hasSpeaker) {
 
-    /** {@code Playing} or {@code Paused}. */
-    public @Nullable String state;
-    public @Nullable Integer volume;
-    public @Nullable Track currentTrack;
-    public @Nullable HardwareInfo hardwareInfo;
+    public static final PlayerState EMPTY = new PlayerState(null, null, null, false);
 
-    public boolean hasSpeaker() {
-        return hardwareInfo != null;
-    }
-
+    /**
+     * Returns whether the player is playing.
+     *
+     * @return {@code true} when the API state is playing
+     */
     public boolean isPlaying() {
         return "playing".equalsIgnoreCase(state);
     }
 
+    /**
+     * Returns whether the player is paused.
+     *
+     * @return {@code true} when the API state is paused
+     */
     public boolean isPaused() {
         return "paused".equalsIgnoreCase(state);
     }
 
-    /**
-     * The reported volume in percent; {@code null} when the API did not include a
-     * volume, so callers can distinguish "unknown" from an actual level of zero.
-     */
-    public @Nullable Integer getVolumePercent() {
-        return volume;
-    }
-
-    public static class Track {
-        public @Nullable String id;
-        public @Nullable String name;
-        public @Nullable String categoryId;
-        public @Nullable Double currentPosition;
-        public @Nullable Double trackDuration;
-    }
-
-    public static class HardwareInfo {
-        public @Nullable String sku;
-        public @Nullable String hardwareVersion;
-        public @Nullable String softwareVersion;
+    public record Track(@Nullable String id, @Nullable String name, @Nullable String categoryId,
+            @Nullable Double currentPosition, @Nullable Double trackDuration) {
     }
 }

@@ -12,45 +12,30 @@
  */
 package org.openhab.binding.eightsleep.internal.handler;
 
-
-import org.openhab.binding.eightsleep.internal.api.model.Alarm;
 import static org.openhab.binding.eightsleep.internal.EightSleepBindingConstants.*;
 
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
 import java.time.Instant;
-import java.time.ZoneId;
-import java.util.Map;
+import java.util.ArrayList;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 import org.openhab.binding.eightsleep.internal.alarm.AlarmSelector;
-import org.openhab.binding.eightsleep.internal.api.ApiException;
-import org.openhab.binding.eightsleep.internal.api.EightSleepApiClient;
-import org.openhab.binding.eightsleep.internal.model.BaseData;
-import org.openhab.binding.eightsleep.internal.model.DeviceData;
-import org.openhab.binding.eightsleep.internal.model.HeatingLevelConversion;
-import org.openhab.binding.eightsleep.internal.handler.LastWriteWins;
-import org.openhab.binding.eightsleep.internal.model.TrendParser;
-import org.openhab.binding.eightsleep.internal.model.UserDataCache;
-import org.openhab.binding.eightsleep.internal.sleep.DataFreshness;
-import org.openhab.binding.eightsleep.internal.sleep.SleepSession;
+import org.openhab.binding.eightsleep.internal.api.EightSleepService;
+import org.openhab.binding.eightsleep.internal.command.BedSideCommandDispatcher;
+import org.openhab.binding.eightsleep.internal.command.BedSideCommands;
+import org.openhab.binding.eightsleep.internal.command.CommandState;
+import org.openhab.binding.eightsleep.internal.config.BedSideConfiguration;
+import org.openhab.binding.eightsleep.internal.model.Alarm;
+import org.openhab.binding.eightsleep.internal.model.BedSide;
+import org.openhab.binding.eightsleep.internal.model.DeviceState;
+import org.openhab.binding.eightsleep.internal.polling.UserDataSnapshot;
+import org.openhab.binding.eightsleep.internal.sync.BedSideChannelSync;
+import org.openhab.binding.eightsleep.internal.sync.ChannelUpdate;
+import org.openhab.binding.eightsleep.internal.sync.LastWriteWins;
+import org.openhab.binding.eightsleep.internal.sync.SyncResult;
 import org.openhab.core.i18n.TimeZoneProvider;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import org.openhab.core.library.types.DateTimeType;
-import org.openhab.core.library.types.DecimalType;
-import org.openhab.core.library.types.OnOffType;
-import org.openhab.core.library.types.QuantityType;
-import org.openhab.core.library.types.StringType;
-import org.openhab.core.library.unit.ImperialUnits;
-import org.openhab.core.library.unit.SIUnits;
-import org.openhab.core.library.unit.Units;
 import org.openhab.core.thing.Bridge;
 import org.openhab.core.thing.ChannelUID;
 import org.openhab.core.thing.Thing;
@@ -61,7 +46,6 @@ import org.openhab.core.thing.binding.BaseThingHandler;
 import org.openhab.core.thing.binding.BridgeHandler;
 import org.openhab.core.types.Command;
 import org.openhab.core.types.RefreshType;
-import org.openhab.core.types.UnDefType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -79,25 +63,15 @@ public class BedSideHandler extends BaseThingHandler {
 
     private @Nullable ScheduledFuture<?> refreshJob;
     private String userId = "";
-    private String side = "left";
-    /** True when one user controls both zones ("Both"/solo bed). */
-    private boolean soloBed;
+    private @Nullable String registeredUserId;
+    private @Nullable AccountHandler registeredAccountHandler;
+    private BedSide side = BedSide.LEFT;
     /**
      * Last commanded value per channel, kept so the sync loop can do last-write-wins
      * merging against polled data: whichever was observed more recently wins. Entries
      * are never expired - a fresh poll simply arrives with a newer timestamp.
      */
-    private final java.util.concurrent.ConcurrentHashMap<String, LastWriteWins.CommandedValue> commanded =
-            new java.util.concurrent.ConcurrentHashMap<>();
-
-    /** alarmId -> commanded enabled state, stamped when the command was sent. */
-    private final java.util.concurrent.ConcurrentHashMap<String, LastWriteWins.CommandedValue> commandedAlarms =
-            new java.util.concurrent.ConcurrentHashMap<>();
-
-    /**
-     * Last commanded/known raw heating level target, kept for the off-state fallback.
-     */
-    private @Nullable Double lastKnownTargetLevel;
+    private final CommandState commandState = new CommandState();
 
     private boolean syncStartedLogged;
     private final java.util.List<String> syncNotes = new ArrayList<>();
@@ -109,7 +83,6 @@ public class BedSideHandler extends BaseThingHandler {
         syncNotes.add(label + "=" + (value == null ? "<null>" : value));
     }
 
-    
     public BedSideHandler(Thing thing, TimeZoneProvider timeZoneProvider) {
         super(thing);
         this.timeZoneProvider = timeZoneProvider;
@@ -117,20 +90,25 @@ public class BedSideHandler extends BaseThingHandler {
 
     @Override
     public void initialize() {
+        disposed = false;
+        applyConfiguration(false);
+    }
+
+    private void applyConfiguration(boolean syncImmediately) {
         BedSideConfiguration config = getConfigAs(BedSideConfiguration.class);
         if (config.userId.isBlank()) {
+            releaseRegistration();
             updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.CONFIGURATION_ERROR,
                     "@text/bedside.status.missing-user");
             return;
         }
-        this.userId = config.userId.trim();
-        String configuredSide = config.label.isBlank() ? "left" : config.label.trim().toLowerCase();
-        // "solo" (Both) beds read data from the left zone; the raw side is kept for
-        // API calls that need it (away mode re-sync uses "solo", never a rewrite).
-        boolean soloBed = "solo".equals(configuredSide);
-        this.side = soloBed ? "left" : configuredSide;
-        this.soloBed = soloBed;
-
+        String newUserId = config.userId.trim();
+        BedSide configuredSide = BedSide.fromString(config.label.isBlank() ? "left" : config.label.trim());
+        if (configuredSide == null) {
+            releaseRegistration();
+            updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.CONFIGURATION_ERROR, "Invalid bed side");
+            return;
+        }
         updateStatus(ThingStatus.UNKNOWN);
 
         AccountHandler account = getAccountHandler();
@@ -140,61 +118,60 @@ public class BedSideHandler extends BaseThingHandler {
         }
         // Register even when the bridge is still connecting: the poll loop only reports
         // users that are registered, so late registration would silently skip this sleeper.
-        if (!account.registerBedSide(userId, side)) {
-            // 1:1 model: another bedSide thing already owns this userId
-            updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.CONFIGURATION_ERROR,
-                    "@text/bedside.status.duplicate-user");
-            return;
+        String registered = registeredUserId;
+        AccountHandler registeredAccount = registeredAccountHandler;
+        if (registered != null && (!registered.equals(newUserId) || registeredAccount != account)) {
+            if (registeredAccount != null) {
+                registeredAccount.unregisterBedSide(registered);
+            }
+            registeredUserId = null;
+            registeredAccountHandler = null;
         }
+        if (registeredUserId == null) {
+            if (!account.registerBedSide(newUserId, configuredSide)) {
+                updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.CONFIGURATION_ERROR,
+                        "@text/bedside.status.duplicate-user");
+                return;
+            }
+            registeredUserId = newUserId;
+            registeredAccountHandler = account;
+        } else {
+            account.updateRegisteredSide(newUserId, configuredSide);
+        }
+        userId = newUserId;
+        side = configuredSide;
         // Always run the channel-sync job; it reports OFFLINE(BRIDGE_OFFLINE) until the
         // bridge has data and flips ONLINE by itself once polls succeed.
         startRefreshJob(account);
+        if (syncImmediately) {
+            scheduleOneShotSync(account, 0);
+        }
+    }
+
+    private void releaseRegistration() {
+        stopRefreshJob();
+        String registered = registeredUserId;
+        AccountHandler registeredAccount = registeredAccountHandler;
+        if (registered != null && registeredAccount != null) {
+            registeredAccount.unregisterBedSide(registered);
+        }
+        registeredUserId = null;
+        registeredAccountHandler = null;
     }
 
     @Override
     public void thingUpdated(Thing thing) {
         super.thingUpdated(thing);
-        // Re-read the configuration so changes apply without a deactivate/reactivate
-        // cycle: re-register under the (possibly new) user id and restart syncing.
-        BedSideConfiguration config = getConfigAs(BedSideConfiguration.class);
-        if (config.userId.isBlank()) {
-            updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.CONFIGURATION_ERROR,
-                    "@text/bedside.status.missing-user");
-            return;
-        }
-        String newUserId = config.userId.trim();
-        String configuredSide = config.label.isBlank() ? "left" : config.label.trim().toLowerCase();
-        boolean newSoloBed = "solo".equals(configuredSide);
-        this.side = newSoloBed ? "left" : configuredSide;
-        this.soloBed = newSoloBed;
-
-        AccountHandler account = getAccountHandler();
-        if (account == null) {
-            updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.BRIDGE_UNINITIALIZED);
-            return;
-        }
-        if (!newUserId.equals(this.userId)) {
-            account.unregisterBedSide(this.userId);
-            this.userId = newUserId;
-        }
-        if (!account.registerBedSide(this.userId, this.side)) {
-            updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.CONFIGURATION_ERROR,
-                    "@text/bedside.status.duplicate-user");
-            return;
-        }
-        startRefreshJob(account);
-        scheduleOneShotSync(account, 0);
+        applyConfiguration(true);
     }
 
     @Override
     public void bridgeStatusChanged(ThingStatusInfo bridgeStatus) {
         super.bridgeStatusChanged(bridgeStatus);
         if (bridgeStatus.getStatus() == ThingStatus.ONLINE && userId != null && !userId.isBlank()) {
-            // Bridge recovered (e.g. after a reconnect): re-arm polling for this side
+            applyConfiguration(false);
             AccountHandler account = getAccountHandler();
-            if (account != null) {
-                account.registerBedSide(userId, side);
-                startRefreshJob(account);
+            if (account != null && registeredAccountHandler == account) {
                 scheduleOneShotSync(account, 2);
             }
         }
@@ -231,10 +208,7 @@ public class BedSideHandler extends BaseThingHandler {
     @Override
     public void dispose() {
         disposed = true;
-        AccountHandler account = getAccountHandler();
-        if (account != null) {
-            account.unregisterBedSide(userId);
-        }
+        releaseRegistration();
         stopRefreshJob();
         for (ScheduledFuture<?> job : oneShotJobs) {
             job.cancel(false);
@@ -246,9 +220,9 @@ public class BedSideHandler extends BaseThingHandler {
     @Override
     public void handleCommand(ChannelUID channelUID, Command command) {
         AccountHandler account = getAccountHandler();
-        EightSleepApiClient client = account != null ? account.getApiClient() : null;
-        if (client == null || account == null) {
-            logger.debug("No API client available; ignoring command {}", command);
+        EightSleepService service = account != null ? account.getService() : null;
+        if (service == null || account == null) {
+            logger.debug("No API service available; ignoring command {}", command);
             return;
         }
         if (command instanceof RefreshType) {
@@ -256,42 +230,12 @@ public class BedSideHandler extends BaseThingHandler {
             return;
         }
 
-        String channelId = channelUID.getIdWithoutGroup();
-        BedSideCommands.Context ctx = new BedSideCommands.Context(client, account, userId, side, soloBed,
-                account.getTemperatureUnit('c') == 'f', commanded, commandedAlarms,
-                () -> scheduleRefresh());
+        BedSideCommands.Context ctx = new BedSideCommands.Context(service, userId, side,
+                account.getTemperatureUnit('c') == 'f', account.getDeviceId(), account.getUserSnapshot(userId),
+                commandState, () -> scheduleRefresh());
 
         try {
-            switch (channelId) {
-                case CHANNEL_TARGET_TEMPERATURE -> BedSideCommands.targetTemperature(ctx, command);
-                case CHANNEL_SIDE_POWER -> BedSideCommands.sidePower(ctx, command);
-                case CHANNEL_HEAD_ANGLE -> BedSideCommands.baseAngle(ctx, command, true);
-                case CHANNEL_FEET_ANGLE -> BedSideCommands.baseAngle(ctx, command, false);
-                case CHANNEL_BASE_PRESET -> BedSideCommands.basePreset(ctx, command);
-                case CHANNEL_PILLOW_POWER -> BedSideCommands.pillowPower(ctx, command);
-                case CHANNEL_PILLOW_TARGET_TEMPERATURE -> BedSideCommands.pillowTargetTemperature(ctx, command);
-                case CHANNEL_ALARM_ENABLED -> BedSideCommands.alarmEnabled(ctx, command);
-                case CHANNEL_ALARM_TIME -> BedSideCommands.alarmTime(ctx, command);
-                case CHANNEL_DISMISS_ALARM -> {
-                    if (command == OnOffType.ON) {
-                        BedSideCommands.dismissAlarm(ctx);
-                    }
-                }
-                case CHANNEL_SNOOZE_ALARM -> {
-                    if (command == OnOffType.ON) {
-                        BedSideCommands.snoozeAlarm(ctx);
-                    }
-                }
-                case CHANNEL_AWAY_MODE -> BedSideCommands.awayMode(ctx, command);
-                case CHANNEL_PRIME -> {
-                    if (command == OnOffType.ON) {
-                        BedSideCommands.primePod(ctx);
-                    }
-                }
-                case CHANNEL_LED_BRIGHTNESS -> BedSideCommands.ledBrightness(ctx, command);
-                case CHANNEL_SNORE_MITIGATION -> logger.debug("Snore mitigation is read-only");
-                default -> logger.warn("Unsupported channel {} for command {}", channelUID, command);
-            }
+            BedSideCommandDispatcher.dispatch(channelUID, command, ctx);
         } catch (Exception e) {
             logger.warn("Failed to execute command {} on {}: {}", command, channelUID, e.getMessage());
         }
@@ -324,19 +268,18 @@ public class BedSideHandler extends BaseThingHandler {
         syncNotes.clear();
         if (!syncStartedLogged) {
             syncStartedLogged = true;
-            logger.debug("Channel sync active for user {} side '{}'; thing status {}",
-                    userId, side, getThing().getStatus());
+            logger.debug("Channel sync active for user {} side '{}'; thing status {}", userId, side,
+                    getThing().getStatus());
         }
-        DeviceData deviceData = account.getDeviceData();
-        UserDataCache userData = account.getUserData(userId);
+        DeviceState deviceState = account.getDeviceState();
+        UserDataSnapshot userData = account.getUserSnapshot(userId);
 
-        BedSideChannelSync.Result result;
+        SyncResult result;
         try {
-            result = BedSideChannelSync.compute(deviceData, userData, side,
-                    account.getTemperatureUnit('c') == 'f',
+            result = BedSideChannelSync.compute(deviceState, userData, side, account.getTemperatureUnit('c') == 'f',
                     account.userRefreshIntervalSeconds(), Instant.now(), java.time.ZoneId.systemDefault(),
-                    commanded.get(CHANNEL_SIDE_POWER), alarmEnabledCommandStamp(account),
-                    commanded.get(CHANNEL_AWAY_MODE), lastKnownTargetLevel);
+                    commandState.channel(CHANNEL_SIDE_POWER), alarmEnabledCommandStamp(account),
+                    commandState.channel(CHANNEL_AWAY_MODE), commandState.lastKnownTargetLevel());
         } catch (RuntimeException e) {
             // A payload quirk must not kill the periodic job; treat as stale data.
             logger.warn("Channel sync computation failed for user {} side '{}': {}", userId, side, e.getMessage(), e);
@@ -344,7 +287,7 @@ public class BedSideHandler extends BaseThingHandler {
         }
 
         // --- thing status decision ---
-        switch (result.statusAction) {
+        switch (result.statusAction()) {
             case BRIDGE_OFFLINE -> {
                 if (getThing().getStatusInfo().getStatusDetail() != ThingStatusDetail.BRIDGE_OFFLINE) {
                     updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.BRIDGE_OFFLINE);
@@ -380,44 +323,37 @@ public class BedSideHandler extends BaseThingHandler {
         }
 
         // --- apply channel updates ---
-        for (BedSideChannelSync.ChannelUpdate update : result.updates) {
+        for (ChannelUpdate update : result.updates()) {
             updateState(update.channelUid(), update.state());
         }
-        if (result.lastKnownTargetLevel != null) {
-            lastKnownTargetLevel = result.lastKnownTargetLevel;
+        if (result.lastKnownTargetLevel() != null) {
+            commandState.setLastKnownTargetLevel(result.lastKnownTargetLevel());
         }
-        if (result.retireSidePowerCommand) {
-            commanded.remove(CHANNEL_SIDE_POWER); // server confirmed
+        if (result.retireSidePowerCommand()) {
+            commandState.retireChannel(CHANNEL_SIDE_POWER);
         }
-        if (result.retireAwayModeCommand) {
-            commanded.remove(CHANNEL_AWAY_MODE); // polled state confirmed the command
+        if (result.retireAwayModeCommand()) {
+            commandState.retireChannel(CHANNEL_AWAY_MODE);
         }
-        if (result.retireAlarmId != null) {
-            commandedAlarms.remove(result.retireAlarmId); // server confirmed
+        if (result.retireAlarmId() != null) {
+            commandState.retireAlarm(result.retireAlarmId());
         }
-        if (result.targetLevelAbsent && userData != null && logger.isDebugEnabled()) {
-            // Target key missing for this side: dump everything we know about the payload
-            // once per poll so the real field names can be identified from the log.
-            logger.debug("TargetHeatingLevel absent for side '{}' (expected while the bed is off); device json keys: {}",
-                    side, deviceData != null ? deviceData.rawFieldNames : List.of());
+        if (result.targetLevelAbsent() && userData != null && logger.isDebugEnabled()) {
+            logger.debug("TargetHeatingLevel absent for side '{}' (expected while the bed is off)", side);
         }
         logSyncSummary();
     }
 
     /** The pending command stamp for the currently selected alarm, if any. */
     private LastWriteWins.@Nullable CommandedValue alarmEnabledCommandStamp(AccountHandler account) {
-        UserDataCache userData = account.getUserData(userId);
+        UserDataSnapshot userData = account.getUserSnapshot(userId);
         if (userData == null) {
             return null;
         }
-        Alarm nextAlarm = AlarmSelector.findTargetAlarm(userData, Instant.now(),
+        Alarm nextAlarm = AlarmSelector.findTargetAlarm(userData.alarms(), Instant.now(),
                 java.time.ZoneId.systemDefault());
-        return nextAlarm != null && nextAlarm.id != null ? commandedAlarms.get(nextAlarm.id) : null;
+        return nextAlarm != null && nextAlarm.id() != null ? commandState.alarm(nextAlarm.id()) : null;
     }
-
-
-
-
 
     /**
      * Logs one compact DEBUG line per sync describing every channel decision, so state
@@ -430,7 +366,6 @@ public class BedSideHandler extends BaseThingHandler {
             logger.debug("Sync for user {} side {}: {}", userId, side, summary);
         }
     }
-
 
     private synchronized @Nullable AccountHandler getAccountHandler() {
         Bridge bridge = getBridge();

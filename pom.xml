@@ -12,7 +12,7 @@
     SPDX-License-Identifier: EPL-2.0
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
 
   <modelVersion>4.0.0</modelVersion>
 
@@ -28,6 +28,13 @@
     <module>org.openhab.binding.eightsleep</module>
   </modules>
 
+  <properties>
+    <spotless.version>2.44.3</spotless.version>
+    <spotless.eclipse.version>4.25</spotless.eclipse.version>
+    <spotless.eclipse.wtp.version>4.21.0</spotless.eclipse.wtp.version>
+    <sat.version>0.17.0</sat.version>
+  </properties>
+
   <build>
     <pluginManagement>
       <plugins>
@@ -41,7 +48,83 @@
             <release>21</release>
           </configuration>
         </plugin>
+        <plugin>
+          <groupId>com.diffplug.spotless</groupId>
+          <artifactId>spotless-maven-plugin</artifactId>
+          <version>${spotless.version}</version>
+          <configuration>
+            <java>
+              <eclipse>
+                <file>openhab_codestyle.xml</file>
+                <version>${spotless.eclipse.version}</version>
+              </eclipse>
+              <removeUnusedImports/>
+              <importOrder>
+                <file>openhab.importorder</file>
+              </importOrder>
+              <endWithNewline/>
+            </java>
+            <pom>
+              <sortPom>
+                <expandEmptyElements>false</expandEmptyElements>
+                <indentAttribute>schemaLocation</indentAttribute>
+                <predefinedSortOrder>recommended_2008_06</predefinedSortOrder>
+                <sortDependencyExclusions/>
+                <sortDependencyManagement/>
+              </sortPom>
+            </pom>
+            <formats>
+              <format>
+                <!-- *.xml -->
+                <includes>
+                  <include>src/**/*.xml</include>
+                </includes>
+                <excludes>
+                  <exclude>**/pom.xml</exclude>
+                  <exclude>**/feature.xml</exclude>
+                  <exclude>src/main/history/**/*.xml</exclude>
+                  <exclude>src/main/resources/header.xml</exclude>
+                  <exclude>src/main/resources/footer.xml</exclude>
+                  <exclude>src/main/resources/input/rss*.xml</exclude>
+                  <exclude>src/test/resources/**/*.xml</exclude>
+                </excludes>
+                <eclipseWtp>
+                  <type>XML</type>
+                  <files>
+                    <file>openhab_wst_xml_files.prefs</file>
+                  </files>
+                  <version>${spotless.eclipse.wtp.version}</version>
+                </eclipseWtp>
+                <trimTrailingWhitespace/>
+                <endWithNewline/>
+              </format>
+            </formats>
+          </configuration>
+          <dependencies>
+            <dependency>
+              <groupId>org.openhab.tools</groupId>
+              <artifactId>openhab-codestyle</artifactId>
+              <version>${sat.version}</version>
+            </dependency>
+          </dependencies>
+          <executions>
+            <execution>
+              <id>codestyle_check</id>
+              <goals>
+                <goal>check</goal>
+              </goals>
+              <phase>initialize</phase>
+            </execution>
+          </executions>
+        </plugin>
       </plugins>
     </pluginManagement>
+
+    <plugins>
+      <plugin>
+        <groupId>com.diffplug.spotless</groupId>
+        <artifactId>spotless-maven-plugin</artifactId>
+      </plugin>
+    </plugins>
   </build>
 </project>

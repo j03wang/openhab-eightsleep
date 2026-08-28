@@ -12,7 +12,6 @@
  */
 package org.openhab.binding.eightsleep.internal.api;
 
-import java.time.Instant;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -50,8 +49,16 @@ public class TokenManager {
      * {@link ApiConstants#AUTH_URL}; tests substitute canned responses.
      */
     public interface AuthTransport {
-        CompletableFuture<String> authenticate(String clientId, String clientSecret, String username,
-                String password);
+        CompletableFuture<String> authenticate(String clientId, String clientSecret, String username, String password);
+
+        /**
+         * Exchanges a refresh token for new credentials via the
+         * {@code refresh_token} grant.
+         */
+        default CompletableFuture<String> refresh(String clientId, String clientSecret, String refreshToken) {
+            return ApiHttpClient.postJson(ApiConstants.AUTH_URL,
+                    RefreshRequest.of(clientId, clientSecret, refreshToken), null);
+        }
     }
 
     /** Production transport: POST the snake_case OAuth body as raw JSON. */
@@ -117,7 +124,8 @@ public class TokenManager {
      * the same in-flight request.
      */
     public synchronized CompletableFuture<String> getAccessTokenAsync() {
-        if (accessToken == null || clock.instant().getEpochSecond() + TOKEN_EXPIRY_BUFFER_SECONDS >= expiryEpochSeconds) {
+        if (accessToken == null
+                || clock.instant().getEpochSecond() + TOKEN_EXPIRY_BUFFER_SECONDS >= expiryEpochSeconds) {
             CompletableFuture<String> pending = refreshAsync();
             inflightRefresh = pending;
             return pending;
@@ -151,29 +159,32 @@ public class TokenManager {
 
     private @Nullable CompletableFuture<String> inflightRefresh;
 
+    private @Nullable String refreshToken;
+
     private synchronized CompletableFuture<String> refreshAsync() {
         CompletableFuture<AuthResponse> future = new CompletableFuture<>();
-        authTransport.authenticate(clientId, clientSecret, username, password)
-                .thenAccept(body -> {
-                    AuthResponse response = GsonHelper.fromJson(body, AuthResponse.class);
-                    if (response != null && response.getAccessToken() != null && response.getExpiresIn() != null) {
-                        future.complete(response);
-                    } else {
-                        future.completeExceptionally(
-                                new ApiException(response == null ? "Empty auth response" : "Authentication response missing token fields"));
-                    }
-                }).exceptionally(ex -> {
-                    Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
-                    future.completeExceptionally(new ApiException("Authentication failed: " + cause.getMessage(), ex));
-                    return null;
-                });
+        // Prefer the refresh_token grant like the official app; fall back to the
+        // password grant when no refresh token is known yet or the exchange fails.
+        if (refreshToken != null) {
+            authTransport.refresh(clientId, clientSecret, refreshToken).thenAccept(body -> {
+                completeAuth(future, body);
+            }).exceptionally(ex -> passwordGrantFallback(future));
+        } else {
+            authTransport.authenticate(clientId, clientSecret, username, password).thenAccept(body -> {
+                completeAuth(future, body);
+            }).exceptionally(ex -> {
+                Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                future.completeExceptionally(new ApiException("Authentication failed: " + cause.getMessage(), ex));
+                return null;
+            });
+        }
 
         return future.handle((response, failure) -> {
             if (failure != null) {
                 Throwable cause = failure.getCause() != null ? failure.getCause() : failure;
                 throw failure instanceof java.util.concurrent.CompletionException ce ? ce
-                        : new java.util.concurrent.CompletionException(
-                                cause instanceof ApiException apiEx ? apiEx : new ApiException(cause.getMessage(), cause));
+                        : new java.util.concurrent.CompletionException(cause instanceof ApiException apiEx ? apiEx
+                                : new ApiException(cause.getMessage(), cause));
             }
             applyAuthResponse(response);
             String token = accessToken;
@@ -184,11 +195,39 @@ public class TokenManager {
         });
     }
 
+    private void completeAuth(CompletableFuture<AuthResponse> future, String body) {
+        AuthResponse response = GsonHelper.fromJson(body, AuthResponse.class);
+        if (response != null && response.getAccessToken() != null && response.getExpiresIn() != null) {
+            future.complete(response);
+        } else {
+            future.completeExceptionally(new ApiException(
+                    response == null ? "Empty auth response" : "Authentication response missing token fields"));
+        }
+    }
+
+    private Void passwordGrantFallback(CompletableFuture<AuthResponse> future) {
+        // Refresh failed (expired/revoked token): clear it and re-authenticate.
+        synchronized (this) {
+            refreshToken = null;
+        }
+        authTransport.authenticate(clientId, clientSecret, username, password).thenAccept(body -> {
+            completeAuth(future, body);
+        }).exceptionally(ex -> {
+            Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+            future.completeExceptionally(new ApiException("Authentication failed: " + cause.getMessage(), ex));
+            return null;
+        });
+        return null;
+    }
+
     /** Must be called from {@link #refreshAsync}'s completion path only. */
     private void applyAuthResponse(AuthResponse response) {
         Long expiresIn = response.getExpiresIn();
         this.accessToken = response.getAccessToken();
         this.userId = response.getUserId();
+        if (response.getRefreshToken() != null) {
+            this.refreshToken = response.getRefreshToken();
+        }
         this.expiryEpochSeconds = clock.instant().getEpochSecond() + (expiresIn != null ? expiresIn.longValue() : 0);
         logger.debug("Obtained new access token for {}, expires in {}s", username, expiresIn);
     }
@@ -216,6 +255,9 @@ public class TokenManager {
     private static class AuthResponse {
         public @Nullable String access_token;
         public @Nullable Double expires_in;
+        // The identity key appears as camelCase "userId" in current auth-api
+        // responses and as snake_case "user_id" in older captures - map both.
+        public @Nullable String userId;
         public @Nullable String user_id;
         public @Nullable String refresh_token;
 
@@ -228,7 +270,28 @@ public class TokenManager {
         }
 
         public @Nullable String getUserId() {
-            return user_id;
+            return userId != null ? userId : user_id;
+        }
+
+        public @Nullable String getRefreshToken() {
+            return refresh_token;
+        }
+    }
+
+    /** {@code refresh_token} grant body, matching the official app. */
+    public static class RefreshRequest {
+        public @Nullable String client_id;
+        public @Nullable String client_secret;
+        public @Nullable String grant_type;
+        public @Nullable String refresh_token;
+
+        public static RefreshRequest of(String clientId, String clientSecret, String refreshToken) {
+            RefreshRequest request = new RefreshRequest();
+            request.client_id = clientId;
+            request.client_secret = clientSecret;
+            request.grant_type = "refresh_token";
+            request.refresh_token = refreshToken;
+            return request;
         }
     }
 }

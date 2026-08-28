@@ -65,14 +65,29 @@ public class TokenManagerTest {
             return future;
         }
 
+        @Override
+        public java.util.concurrent.CompletableFuture<String> refresh(String clientId, String clientSecret,
+                String refreshToken) {
+            calls++;
+            java.util.concurrent.CompletableFuture<String> future = new java.util.concurrent.CompletableFuture<>();
+            if (!failures.isEmpty()) {
+                future.completeExceptionally(failures.remove(0));
+            } else if (!responses.isEmpty()) {
+                future.complete(responses.remove(0));
+            } else {
+                future.completeExceptionally(new IllegalStateException("no scripted response"));
+            }
+            return future;
+        }
+
         String lastResponse() {
             return responses.isEmpty() ? null : responses.get(0);
         }
     }
 
     private static String authJson(String token, double expiresInSeconds, String userId) {
-        return "{\"access_token\":\"" + token + "\",\"expires_in\":" + expiresInSeconds
-                + ",\"user_id\":\"" + userId + "\",\"refresh_token\":\"r1\"}";
+        return "{\"access_token\":\"" + token + "\",\"expires_in\":" + expiresInSeconds + ",\"user_id\":\"" + userId
+                + "\",\"refresh_token\":\"r1\"}";
     }
 
     private interface ThrowingCall {

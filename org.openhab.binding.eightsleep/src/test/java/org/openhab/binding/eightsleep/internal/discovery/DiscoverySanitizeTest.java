@@ -12,17 +12,15 @@
  */
 package org.openhab.binding.eightsleep.internal.discovery;
 
-
-import org.openhab.binding.eightsleep.internal.api.model.UserCurrentDevice;
-import org.openhab.binding.eightsleep.internal.api.model.UserProfileResult;
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.junit.Test;
-import org.openhab.binding.eightsleep.internal.api.EightSleepApiClient;
+import org.openhab.binding.eightsleep.internal.model.BedSide;
+import org.openhab.binding.eightsleep.internal.model.UserCurrentDevice;
+import org.openhab.binding.eightsleep.internal.model.UserProfile;
 import org.openhab.core.config.discovery.DiscoveryResult;
 import org.openhab.core.thing.ThingUID;
 
@@ -74,43 +72,39 @@ public class DiscoverySanitizeTest {
     /** A profile without a userId cannot produce a thing - must yield null, not throw. */
     @Test
     public void nullUserIdYieldsNoResult() {
-        assertNull(BedSideDiscoveryService.buildDiscoveryResult(
-                BRIDGE, "Pod", profile(null, "left")));
+        assertNull(BedSideDiscoveryService.buildDiscoveryResult(BRIDGE, "Pod", profile(null, "left")));
     }
 
-    private static UserProfileResult profile(String userId, String side) {
-        var device = new UserCurrentDevice();
-        device.side = side;
-        device.deviceId = "dev1";
-        return new UserProfileResult(userId, device);
+    private static UserProfile profile(String userId, String side) {
+        var device = new UserCurrentDevice(BedSide.fromString(side), "dev1");
+        return new UserProfile(userId, device);
     }
 
     @Test
     public void resultCarriesUserIdAndNormalizedLabel() {
-        DiscoveryResult result = BedSideDiscoveryService.buildDiscoveryResult(
-                BRIDGE, "Master Pod", profile("u/1", "Right"));
+        DiscoveryResult result = BedSideDiscoveryService.buildDiscoveryResult(BRIDGE, "Master Pod",
+                profile("u/1", "Right"));
         assertEquals("eightsleep:bedSide:bridge1:u_1", result.getThingUID().toString());
         assertEquals("u/1", result.getProperties().get("userId"));
         assertEquals("right", result.getProperties().get("label"));
         assertEquals(BRIDGE, result.getBridgeUID());
         // getRepresentationProperty returns the property NAME, not its value
         assertEquals("userId", result.getRepresentationProperty());
-        assertTrue("label mentions side and device", result.getLabel().contains("Right")
-                && result.getLabel().contains("Master Pod"));
+        assertTrue("label mentions side and device",
+                result.getLabel().contains("Right") && result.getLabel().contains("Master Pod"));
     }
 
     @Test
     public void soloUserGetsBothLabel() {
-        DiscoveryResult result = BedSideDiscoveryService.buildDiscoveryResult(
-                BRIDGE, "Pod", profile("solo_user", "solo"));
+        DiscoveryResult result = BedSideDiscoveryService.buildDiscoveryResult(BRIDGE, "Pod",
+                profile("solo_user", "solo"));
         assertTrue(result.getLabel().contains("Both"));
         assertEquals("solo", result.getProperties().get("label"));
     }
 
     @Test
     public void missingSideDefaultsToLeftInResult() {
-        DiscoveryResult result = BedSideDiscoveryService.buildDiscoveryResult(
-                BRIDGE, "Pod", profile("u2", null));
+        DiscoveryResult result = BedSideDiscoveryService.buildDiscoveryResult(BRIDGE, "Pod", profile("u2", null));
         assertEquals("left", result.getProperties().get("label"));
         assertTrue(result.getLabel().contains("Left"));
     }

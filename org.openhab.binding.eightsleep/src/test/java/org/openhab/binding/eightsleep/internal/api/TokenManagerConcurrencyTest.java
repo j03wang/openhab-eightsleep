@@ -17,8 +17,8 @@ import static org.junit.Assert.assertTrue;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -86,8 +86,7 @@ public class TokenManagerConcurrencyTest {
 
         assertEquals(failures.toString(), 0, failures.size());
         assertEquals(THREADS, tokens.size());
-        assertEquals("all callers must see the same token", 1,
-                tokens.stream().distinct().count());
+        assertEquals("all callers must see the same token", 1, tokens.stream().distinct().count());
         assertEquals("thundering herd must collapse into one auth call", 1, auth.calls);
     }
 

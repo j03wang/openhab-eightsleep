@@ -6,8 +6,10 @@
 	<type>binding</type>
 	<name>Eight Sleep Binding</name>
 	<description>The Eight Sleep binding integrates Eight Sleep smart mattress covers (Pod) via the Eight Sleep cloud
-	 API. It exposes sleep tracking metrics, bed temperature control, adjustable base control and alarms for each
-	 side of the bed.</description>
+		API.
+		It exposes sleep tracking metrics, bed temperature control, adjustable base control and alarms for each
+		side of the
+		bed.</description>
 	<connection>cloud</connection>
 
 </addon:addon>

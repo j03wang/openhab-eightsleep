@@ -17,12 +17,11 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.function.BooleanSupplier;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
-import org.eclipse.jdt.annotation.Nullable;
 import org.openhab.binding.eightsleep.internal.api.ApiException;
-import org.openhab.binding.eightsleep.internal.api.EightSleepApiClient;
-import org.openhab.binding.eightsleep.internal.model.UserDataCache;
+import org.openhab.binding.eightsleep.internal.api.EightSleepService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -38,30 +37,25 @@ public class AccountPoller {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(AccountPoller.class);
 
-    private final EightSleepApiClient client;
+    private final EightSleepService service;
     private final String deviceId;
     private final java.util.function.Function<String, UserDataCache> cacheFor;
-    private final Runnable speakerMarker;
+    private final BooleanSupplier active;
 
     /** User ids currently registered for polling. */
     private final Set<String> userids = new CopyOnWriteArraySet<>();
 
-    public AccountPoller(EightSleepApiClient client, String deviceId,
-            java.util.function.Function<String, UserDataCache> cacheFor, Runnable speakerMarker) {
-        this.client = client;
+    public AccountPoller(EightSleepService service, String deviceId,
+            java.util.function.Function<String, UserDataCache> cacheFor) {
+        this(service, deviceId, cacheFor, () -> true);
+    }
+
+    public AccountPoller(EightSleepService service, String deviceId,
+            java.util.function.Function<String, UserDataCache> cacheFor, BooleanSupplier active) {
+        this.service = service;
         this.deviceId = deviceId;
         this.cacheFor = cacheFor;
-        this.speakerMarker = speakerMarker;
-    }
-
-    /** The API client this poller is bound to, for stale-instance detection. */
-    public EightSleepApiClient client() {
-        return client;
-    }
-
-    /** The device id this poller polls, for stale-instance detection. */
-    public String deviceId() {
-        return deviceId;
+        this.active = active;
     }
 
     /**
@@ -95,15 +89,18 @@ public class AccountPoller {
         // Stamp with the START time: the payload reflects the world as it was when
         // the request was issued, so any command sent while it is in flight is newer.
         Instant observedAt = Instant.now();
-        client.getDeviceUsers(deviceId).thenAccept(users -> {
+        service.getDeviceAssignments(deviceId).thenAccept(users -> {
+            if (!active.getAsBoolean()) {
+                return;
+            }
             Set<String> candidates = new java.util.HashSet<>();
-            if (users.leftUserId != null) {
-                candidates.add(users.leftUserId);
+            if (users.leftUserId() != null) {
+                candidates.add(users.leftUserId());
             }
-            if (users.rightUserId != null) {
-                candidates.add(users.rightUserId);
+            if (users.rightUserId() != null) {
+                candidates.add(users.rightUserId());
             }
-            candidates.addAll(users.awaySides.values());
+            candidates.addAll(users.awaySides().values());
 
             for (String uid : candidates) {
                 UserDataCache data = cacheFor.apply(uid);
@@ -124,9 +121,12 @@ public class AccountPoller {
         // The trends API wants the IANA timezone id (upstream passes the HA timezone)
         String tz = java.util.TimeZone.getDefault().getID();
         for (String userId : Set.copyOf(userids)) {
-            client.getUserTrends(userId, start, now, tz).thenAccept(days -> {
+            service.getUserTrends(userId, start, now, tz).thenAccept(days -> {
+                if (!active.getAsBoolean()) {
+                    return;
+                }
                 UserDataCache data = cacheFor.apply(userId);
-                data.trendDays = days;
+                data.trends = days;
                 data.lastUpdated = Instant.now();
             }).exceptionally(ex -> {
                 Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
@@ -134,9 +134,9 @@ public class AccountPoller {
                 return null;
             });
 
-            client.getPlayerState(userId).thenAccept(state -> {
-                if (state.hasSpeaker()) {
-                    speakerMarker.run();
+            service.getPlayerState(userId).thenAccept(state -> {
+                if (!active.getAsBoolean()) {
+                    return;
                 }
                 UserDataCache data = cacheFor.apply(userId);
                 data.playerState = state;
@@ -147,7 +147,10 @@ public class AccountPoller {
             });
 
             Instant pollStartedAt = Instant.now();
-            client.getAlarms(userId).thenAccept(alarms -> {
+            service.getAlarms(userId).thenAccept(alarms -> {
+                if (!active.getAsBoolean()) {
+                    return;
+                }
                 UserDataCache data = cacheFor.apply(userId);
                 // Stamp with the START time: any command issued while this request was
                 // in flight is newer and must win the LWW merge.
@@ -160,7 +163,10 @@ public class AccountPoller {
             });
 
             Instant tempPollStartedAt = Instant.now();
-            client.getTemperature(userId).thenAccept(temp -> {
+            service.getTemperatureState(userId).thenAccept(temp -> {
+                if (!active.getAsBoolean()) {
+                    return;
+                }
                 UserDataCache data = cacheFor.apply(userId);
                 // Stamp with the START time so commands issued mid-flight win LWW.
                 data.temperatureAt = tempPollStartedAt;
@@ -170,9 +176,12 @@ public class AccountPoller {
                 return null;
             });
 
-            client.getTemperatureAll(userId).thenAccept(pillowData -> {
+            service.getPillowState(userId).thenAccept(pillowState -> {
+                if (!active.getAsBoolean()) {
+                    return;
+                }
                 UserDataCache data = cacheFor.apply(userId);
-                data.pillowData = pillowData;
+                data.pillowState = pillowState;
             }).exceptionally(ex -> {
                 // Pillow is optional (Pod 5 accessory); a missing payload just means no pillow
                 LOGGER.debug("No pillow data for user {}", userId);
@@ -186,6 +195,9 @@ public class AccountPoller {
      * gracefully so the rest of the binding keeps working (upstream #122).
      */
     private void handleAlarmFailure(String userId, Instant pollStartedAt, Throwable ex) {
+        if (!active.getAsBoolean()) {
+            return;
+        }
         Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
         if (cause instanceof ApiException apiEx && apiEx.isSubscriptionRequired()) {
             LOGGER.debug("Alarms require a subscription for user {}; skipping", userId);
@@ -198,5 +210,4 @@ public class AccountPoller {
             LOGGER.debug("Failed to refresh alarms for user {}: {}", userId, cause.getMessage());
         }
     }
-
 }

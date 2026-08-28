@@ -14,8 +14,6 @@ package org.openhab.binding.eightsleep.internal;
 
 import static org.openhab.binding.eightsleep.internal.EightSleepBindingConstants.*;
 
-import java.util.Set;
-
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 import org.openhab.binding.eightsleep.internal.handler.AccountHandler;

@@ -24,7 +24,6 @@ import java.util.concurrent.CompletableFuture;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
-import org.openhab.binding.eightsleep.internal.EightSleepBindingConstants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -62,6 +61,11 @@ public class ApiHttpClient {
 
     public static CompletableFuture<String> send(String method, String url, @Nullable String jsonBody,
             @Nullable String accessToken) {
+        return send(method, url, jsonBody, accessToken, Map.of());
+    }
+
+    public static CompletableFuture<String> send(String method, String url, @Nullable String jsonBody,
+            @Nullable String accessToken, Map<String, String> extraHeaders) {
         HttpRequest.Builder builder = HttpRequest.newBuilder().uri(URI.create(url))
                 .timeout(Duration.ofSeconds(ApiConstants.REQUEST_TIMEOUT_SECONDS));
 
@@ -71,12 +75,15 @@ public class ApiHttpClient {
         if (accessToken != null && !accessToken.isBlank()) {
             builder.header("Authorization", "Bearer " + accessToken);
         }
+        for (Map.Entry<String, String> header : extraHeaders.entrySet()) {
+            builder.header(header.getKey(), header.getValue());
+        }
 
         switch (method) {
             case "GET" -> builder.GET();
             case "DELETE" -> builder.DELETE();
-            default -> builder.method(method, HttpRequest.BodyPublishers.ofString(
-                    jsonBody != null ? jsonBody : "", StandardCharsets.UTF_8));
+            default -> builder.method(method,
+                    HttpRequest.BodyPublishers.ofString(jsonBody != null ? jsonBody : "", StandardCharsets.UTF_8));
         }
 
         HttpRequest request = builder.build();
@@ -92,9 +99,9 @@ public class ApiHttpClient {
                     boolean subscriptionRequired = status == 403 && body != null
                             && body.toLowerCase().contains("subscription");
                     CompletableFuture<String> failed = new CompletableFuture<>();
-                    failed.completeExceptionally(new ApiException(
-                            "HTTP " + status + " for " + method + " " + url + ": " + truncate(body),
-                            status == 401, subscriptionRequired));
+                    failed.completeExceptionally(
+                            new ApiException("HTTP " + status + " for " + method + " " + url + ": " + truncate(body),
+                                    status == 401, subscriptionRequired));
                     return failed;
                 });
     }

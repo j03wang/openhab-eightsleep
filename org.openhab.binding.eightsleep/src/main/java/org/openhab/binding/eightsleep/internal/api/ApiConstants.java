@@ -38,6 +38,6 @@ public final class ApiConstants {
 
     public static final int REQUEST_TIMEOUT_SECONDS = 60;
 
-    public static final Map<String, String> DEFAULT_HEADERS = Map.of("accept", "application/json",
-            "content-type", "application/json", "user-agent", "openHAB Eight Sleep Binding");
+    public static final Map<String, String> DEFAULT_HEADERS = Map.of("accept", "application/json", "content-type",
+            "application/json", "user-agent", "openHAB Eight Sleep Binding");
 }

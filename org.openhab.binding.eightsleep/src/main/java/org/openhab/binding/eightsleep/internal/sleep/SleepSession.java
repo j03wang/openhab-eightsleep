@@ -17,10 +17,7 @@ import java.time.Instant;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
-import org.openhab.binding.eightsleep.internal.model.TrendParser;
-
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
+import org.openhab.binding.eightsleep.internal.model.TrendData;
 
 /**
  * Decisions over one live sleep session: the current sleep stage derived from the
@@ -47,29 +44,21 @@ public final class SleepSession {
      *
      * @return "awake"/"light"/"deep"/"rem", or null when unknown/not currently sleeping
      */
-    public static @Nullable String currentStage(@Nullable JsonObject session, Instant now) {
+    public static @Nullable String currentStage(TrendData.@Nullable Session session, Instant now) {
         if (session == null) {
             return null;
         }
-        Instant sleepStart = TrendParser.parseTimestamp(TrendParser.getString(session, "sleepStart"));
-        Instant sleepEnd = TrendParser.parseTimestamp(TrendParser.getString(session, "sleepEnd"));
+        Instant sleepStart = session.sleepStart();
+        Instant sleepEnd = session.sleepEnd();
         if (sleepStart == null || sleepEnd == null || now.isBefore(sleepStart) || now.isAfter(sleepEnd)) {
-            return null; // not inside a live sleep session
-        }
-        long elapsedSeconds = Duration.between(sleepStart, now).getSeconds();
-        JsonElement stagesEl = session.get("stages");
-        if (stagesEl == null || !stagesEl.isJsonArray()) {
             return null;
         }
+        long elapsedSeconds = Duration.between(sleepStart, now).getSeconds();
         String current = null;
         long consumed = 0;
-        for (JsonElement entry : stagesEl.getAsJsonArray()) {
-            if (!entry.isJsonObject()) {
-                continue;
-            }
-            JsonObject segment = entry.getAsJsonObject();
-            Double duration = TrendParser.getDouble(segment, "duration");
-            String stage = TrendParser.getString(segment, "stage");
+        for (TrendData.Stage segment : session.stages()) {
+            Double duration = segment.durationSeconds();
+            String stage = segment.name();
             if (duration == null || stage == null) {
                 continue;
             }
@@ -89,18 +78,8 @@ public final class SleepSession {
      * {@link #PRESENCE_FRESH_SECONDS} (either direction - future timestamps are
      * tolerated as clock skew) confirms presence.
      */
-    public static boolean isPresent(@Nullable JsonObject session, Instant now) {
-        JsonObject ts = TrendParser.getObject(session, "timeseries");
-        JsonElement el = ts != null ? ts.get("heartRate") : null;
-        if (el == null || !el.isJsonArray() || el.getAsJsonArray().size() == 0) {
-            return false;
-        }
-        JsonElement entry = el.getAsJsonArray().get(el.getAsJsonArray().size() - 1);
-        if (!entry.isJsonArray() || entry.getAsJsonArray().size() < 1
-                || !entry.getAsJsonArray().get(0).isJsonPrimitive()) {
-            return false;
-        }
-        Instant heartBeatTime = TrendParser.parseTimestamp(entry.getAsJsonArray().get(0).getAsString());
+    public static boolean isPresent(TrendData.@Nullable Session session, Instant now) {
+        Instant heartBeatTime = session != null ? session.lastTime("heartRate") : null;
         return heartBeatTime != null
                 && Duration.between(heartBeatTime, now).abs().getSeconds() < PRESENCE_FRESH_SECONDS;
     }

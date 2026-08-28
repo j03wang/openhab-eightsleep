@@ -119,8 +119,8 @@ public class ApiHttpClientStatusTest {
 
         seenAuthorization.clear();
         ApiHttpClient.send("GET", url, null, null).get(5, TimeUnit.SECONDS);
-        assertEquals("no token -> no Authorization header",
-                java.util.Arrays.asList(new String[] { null }), seenAuthorization);
+        assertEquals("no token -> no Authorization header", java.util.Arrays.asList(new String[] { null }),
+                seenAuthorization);
     }
 
     @Test

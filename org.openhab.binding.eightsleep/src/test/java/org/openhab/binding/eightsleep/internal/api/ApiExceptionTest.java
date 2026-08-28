@@ -56,8 +56,7 @@ public class ApiExceptionTest {
         assertTrue("unauthorized must survive wrapping", outer.isUnauthorized());
         assertTrue("subscription flag must survive wrapping", outer.isSubscriptionRequired());
 
-        ApiException benignOuter = new ApiException("outer2",
-                new RuntimeException(new ApiException("inner-benign")));
+        ApiException benignOuter = new ApiException("outer2", new RuntimeException(new ApiException("inner-benign")));
         assertFalse(benignOuter.isUnauthorized());
         assertFalse(benignOuter.isSubscriptionRequired());
     }

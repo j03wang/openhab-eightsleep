@@ -12,11 +12,6 @@
  */
 package org.openhab.binding.eightsleep.internal.api;
 
-import org.openhab.binding.eightsleep.internal.api.model.Alarm;
-import org.openhab.binding.eightsleep.internal.api.model.DeviceUsers;
-import org.openhab.binding.eightsleep.internal.api.model.PillowData;
-import org.openhab.binding.eightsleep.internal.api.model.PillowEntry;
-
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -32,8 +27,12 @@ import java.util.Map;
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 import org.junit.Test;
-
-import com.google.gson.JsonArray;
+import org.openhab.binding.eightsleep.internal.model.Alarm;
+import org.openhab.binding.eightsleep.internal.model.BedSide;
+import org.openhab.binding.eightsleep.internal.model.DeviceAssignments;
+import org.openhab.binding.eightsleep.internal.model.DeviceState;
+import org.openhab.binding.eightsleep.internal.model.PillowEntry;
+import org.openhab.binding.eightsleep.internal.model.PillowState;
 
 /**
  * Spec-first contract tests for every Eight Sleep endpoint the binding consumes.
@@ -98,7 +97,7 @@ public class EndpointContractTest {
     }
 
     // ==================== GET /v1/devices/{id} ====================
-    // Spec: {"result":{...}} envelope; per-side heating level/target/now-heating,
+    // Spec: {"result":{...}} envelope with per-side heating level/target/now-heating,
     // hasWater, priming state, LED brightness and model/firmware identity.
 
     @Test
@@ -112,27 +111,25 @@ public class EndpointContractTest {
         body = fixture("devices-id", body);
 
         boolean live = isLive("devices-id");
-        org.openhab.binding.eightsleep.internal.model.DeviceData data = EightSleepApiClient.parseDeviceData(body);
+        DeviceState data = ApiTestFixtures.parseDeviceData(body);
         if (!live) {
-            assertEquals(Double.valueOf(10), data.leftHeatingLevel);
-            assertEquals(Double.valueOf(-20), data.leftTargetHeatingLevel);
-            assertEquals(Boolean.TRUE, data.hasWater);
-            assertEquals(Boolean.TRUE, data.leftNowHeating);
+            assertEquals(Double.valueOf(10), data.leftHeatingLevel());
+            assertEquals(Double.valueOf(-20), data.leftTargetHeatingLevel());
+            assertEquals(Boolean.TRUE, data.hasWater());
+            assertEquals(Boolean.TRUE, data.leftNowHeating());
             assertTrue(data.isPod());
             assertTrue(data.hasBase());
             return;
         }
         // Live invariants: whatever the account's pod reports, every field the
         // binding publishes channels from must be present and internally consistent.
-        assertTrue("result envelope must unwrap",
-                data.rawFieldNames.containsAll(java.util.List.of("deviceId")));
-        assertNotNull("heating levels drive bed-temperature fallback", data.leftHeatingLevel);
-        assertNotNull(data.rightHeatingLevel);
-        assertNotNull("water status drives the hasWater channel", data.hasWater);
-        assertNotNull("LED level drives the brightness channel", data.ledBrightnessLevel);
-        if (data.leftTargetHeatingLevel != null && data.leftNowHeating != null) {
+        assertNotNull("heating levels drive bed-temperature fallback", data.leftHeatingLevel());
+        assertNotNull(data.rightHeatingLevel());
+        assertNotNull("water status drives the hasWater channel", data.hasWater());
+        assertNotNull("LED level drives the brightness channel", data.ledBrightnessLevel());
+        if (data.leftTargetHeatingLevel() != null && data.leftNowHeating() != null) {
             assertFalse("an actively heating side must report a target level",
-                    data.leftNowHeating.booleanValue() && data.leftTargetHeatingLevel == 0);
+                    data.leftNowHeating().booleanValue() && data.leftTargetHeatingLevel() == 0);
         }
     }
 
@@ -164,20 +161,14 @@ public class EndpointContractTest {
                       "heartRate":[["2026-08-22T23:05:00Z",62]]}}]}
                 ]}""");
         boolean trendsLive = isLive("trends-days");
-        JsonArray days = EightSleepApiClient.parseTrendDays(body);
+        var trends = ApiTestFixtures.parseTrendDays(body);
+        assertTrue("at least one day", !trends.days().isEmpty());
 
-        assertTrue("at least one day", days.size() >= 1);
-
-        org.openhab.binding.eightsleep.internal.model.TrendParser parser =
-                new org.openhab.binding.eightsleep.internal.model.TrendParser(days);
-
-        var currentDay = parser.getDay(0);
+        var currentDay = trends.getDay(0);
         assertNotNull(currentDay);
-        Double score = org.openhab.binding.eightsleep.internal.model.TrendParser.getDouble(currentDay, "score");
-        Instant dayStart = org.openhab.binding.eightsleep.internal.model.TrendParser.parseTimestamp(
-                org.openhab.binding.eightsleep.internal.model.TrendParser.getString(currentDay, "presenceStart"));
-        Instant dayEnd = org.openhab.binding.eightsleep.internal.model.TrendParser.parseTimestamp(
-                org.openhab.binding.eightsleep.internal.model.TrendParser.getString(currentDay, "presenceEnd"));
+        Double score = currentDay.score();
+        Instant dayStart = currentDay.presenceStart();
+        Instant dayEnd = currentDay.presenceEnd();
 
         assertNotNull("score drives the sleep-score channel", score);
         assertNotNull("presenceStart anchors session timing", dayStart);
@@ -187,54 +178,40 @@ public class EndpointContractTest {
             assertFalse("presence window must be chronological", dayEnd.isBefore(dayStart));
         }
 
-        var quality = org.openhab.binding.eightsleep.internal.model.TrendParser.getObject(currentDay,
-                "sleepQualityScore");
+        var quality = currentDay.sleepQualityScore();
         assertNotNull("sleepQualityScore object required", quality);
-        Double qualityTotal = org.openhab.binding.eightsleep.internal.model.TrendParser.getDouble(quality, "total");
-        Double hrvCurrent = org.openhab.binding.eightsleep.internal.model.TrendParser
-                .getDouble(org.openhab.binding.eightsleep.internal.model.TrendParser.getObject(quality, "hrv"),
-                        "current");
+        Double qualityTotal = quality.total();
+        Double hrvCurrent = quality.hrv();
         assertNotNull("quality.total drives routine channels", qualityTotal);
         if (!trendsLive) {
             assertEquals(Double.valueOf(90), qualityTotal);
             assertEquals(Double.valueOf(44), hrvCurrent);
         }
 
-        var session = parser.getCurrentSession();
+        var session = trends.getCurrentSession();
         if (session != null) {
-            Double hr = org.openhab.binding.eightsleep.internal.model.TrendParser.latestSeriesValue(session,
-                    "heartRate");
+            Double hr = session.latestValue("heartRate");
             if (!trendsLive) {
                 assertEquals(Double.valueOf(62), hr);
-                assertNull(org.openhab.binding.eightsleep.internal.model.TrendParser.latestSeriesValue(session,
-                        "tempRoomC"));
+                assertNull(session.latestValue("tempRoomC"));
             } else if (hr != null) {
                 assertTrue("heart rate readings stay physiological", hr >= 20 && hr <= 250);
             }
         }
 
-        var previousDay = parser.getDay(1);
+        var previousDay = trends.getDay(1);
         if (!trendsLive) {
             assertNotNull(previousDay);
-            assertEquals(Double.valueOf(72), org.openhab.binding.eightsleep.internal.model.TrendParser
-                    .getDouble(previousDay, "score"));
-            assertEquals(Double.valueOf(12), org.openhab.binding.eightsleep.internal.model.TrendParser
-                    .getDouble(previousDay, "tnt"));
-            var previousSession = parser.getCurrentSessionOf(previousDay);
-            assertEquals(Double.valueOf(21.3),
-                    org.openhab.binding.eightsleep.internal.model.TrendParser.latestSeriesValue(
-                            previousSession, "tempRoomC"));
-            assertEquals(Double.valueOf(29.5),
-                    org.openhab.binding.eightsleep.internal.model.TrendParser.latestSeriesValue(
-                            previousSession, "tempBedC"));
-            assertEquals(Double.valueOf(9000), org.openhab.binding.eightsleep.internal.model.TrendParser
-                    .getDouble(previousDay, "lightDuration"));
+            assertEquals(Double.valueOf(72), previousDay.score());
+            assertEquals(Double.valueOf(12), previousDay.tossAndTurns());
+            var previousSession = org.openhab.binding.eightsleep.internal.model.TrendData.currentSessionOf(previousDay);
+            assertEquals(Double.valueOf(21.3), previousSession.latestValue("tempRoomC"));
+            assertEquals(Double.valueOf(29.5), previousSession.latestValue("tempBedC"));
+            assertEquals(Double.valueOf(9000), previousDay.lightDuration());
         } else if (previousDay != null) {
-            Double prevScore = org.openhab.binding.eightsleep.internal.model.TrendParser
-                    .getDouble(previousDay, "score");
-            String curDay = org.openhab.binding.eightsleep.internal.model.TrendParser.getString(currentDay, "day");
-            String prevDayName = org.openhab.binding.eightsleep.internal.model.TrendParser
-                    .getString(previousDay, "day");
+            Double prevScore = previousDay.score();
+            String curDay = currentDay.day();
+            String prevDayName = previousDay.day();
             if (curDay != null && prevDayName != null) {
                 assertTrue("days must be ordered newest-first", curDay.compareTo(prevDayName) >= 0);
             }
@@ -257,21 +234,20 @@ public class EndpointContractTest {
                   }],
                  "recommendedAlarm":{}}""");
 
-        List<Alarm> alarms = EightSleepApiClient.parseAlarms(body);
+        List<Alarm> alarms = ApiTestFixtures.parseAlarms(body);
         if (!isLive("alarms-v2")) {
             assertEquals(1, alarms.size());
             Alarm alarm = alarms.get(0);
-            assertEquals("6bd72e29-f6ee-432a-b180-721f281d2659", alarm.id);
-            assertEquals(Boolean.TRUE, alarm.enabled);
-            assertEquals("06:45:00", alarm.time);
+            assertEquals("6bd72e29-f6ee-432a-b180-721f281d2659", alarm.id());
+            assertEquals(Boolean.TRUE, alarm.enabled());
+            assertEquals(java.time.LocalTime.of(6, 45), alarm.time());
         }
         // Both modes: every alarm exposes exactly what the toggle builder and the
         // alarm scheduler need - id, HH:mm:ss time, at least one behaviour section.
         for (Alarm alarm : alarms) {
-            assertNotNull(alarm.id);
-            assertNotNull(alarm.time);
-            assertTrue("HH:mm:ss shape", alarm.time.matches("\\d{2}:\\d{2}:\\d{2}"));
-            assertTrue(alarm.thermal != null || alarm.vibration != null || alarm.repeat != null);
+            assertNotNull(alarm.id());
+            assertNotNull(alarm.time());
+            assertTrue(!alarm.thermal().isEmpty() || !alarm.vibration().isEmpty() || alarm.repeat() != null);
         }
     }
 
@@ -282,16 +258,15 @@ public class EndpointContractTest {
      */
     @Test
     public void alarmTogglePayloadIsBareAndIntegerized() throws IOException {
-        List<Alarm> alarms = EightSleepApiClient.parseAlarms("""
+        List<Alarm> alarms = ApiTestFixtures.parseAlarms("""
                 {"alarms":[{"id":"a1","enabled":true,"time":"07:00:00","snoozing":false,
                  "repeat":{"enabled":false},"thermal":{"enabled":true,"level":-10.0},
                  "vibration":{"enabled":true,"level":50.0}}]}""");
 
-        String json = EightSleepApiClient.buildAlarmUpdateBody(alarms.get(0), false, null);
+        String json = ApiTestFixtures.buildAlarmUpdateBody(alarms.get(0), false, null);
         assertTrue("bare object shape (verified live)", !json.contains("alarmSettings"));
         assertTrue("thermal.level must be integer", json.contains("\"level\":-10") && !json.contains("-10.0"));
-        assertTrue("vibration.level must be integer",
-                json.contains("\"level\":50") && !json.contains("50.0"));
+        assertTrue("vibration.level must be integer", json.contains("\"level\":50") && !json.contains("50.0"));
 
         // Fixture-derived invariant: EVERY alarm of a live capture must survive a
         // full parse -> modify -> serialize round-trip with its client-settable
@@ -301,19 +276,18 @@ public class EndpointContractTest {
         }
         String liveBody = java.nio.file.Files.readString(java.nio.file.Path.of(FIXTURE_DIR, "alarms-v2.json"),
                 StandardCharsets.UTF_8);
-        List<Alarm> liveAlarms = EightSleepApiClient.parseAlarms(liveBody);
+        List<Alarm> liveAlarms = ApiTestFixtures.parseAlarms(liveBody);
         assertTrue("live capture has alarms", !liveAlarms.isEmpty());
         for (Alarm liveAlarm : liveAlarms) {
-            String liveJson = EightSleepApiClient.buildAlarmUpdateBody(liveAlarm, true, null);
-            assertNotNull("fixture alarm must carry an id", liveAlarm.id);
+            String liveJson = ApiTestFixtures.buildAlarmUpdateBody(liveAlarm, true, null);
+            assertNotNull("fixture alarm must carry an id", liveAlarm.id());
             assertTrue("body id must equal the path id used for PUT",
-                    liveJson.contains("\"id\":\"" + liveAlarm.id + "\""));
+                    liveJson.contains("\"id\":\"" + liveAlarm.id() + "\""));
             assertTrue("audio section survives round-trip", liveJson.contains("\"audio\""));
             assertTrue("smart section survives round-trip", liveJson.contains("\"smart\""));
             assertTrue("tags section survives round-trip", liveJson.contains("\"tags\""));
-            assertFalse("server-computed fields stay stripped",
-                    liveJson.contains("nextTimestamp") || liveJson.contains("dismissedUntil")
-                            || liveJson.contains("snoozedUntil"));
+            assertFalse("server-computed fields stay stripped", liveJson.contains("nextTimestamp")
+                    || liveJson.contains("dismissedUntil") || liveJson.contains("snoozedUntil"));
             assertFalse("no whole-number doubles leak into Int32 fields",
                     liveJson.matches("(?s).*\"level\":-?\\d+\\.0.*"));
         }
@@ -325,7 +299,7 @@ public class EndpointContractTest {
     public void currentUserParsed() {
         String body = fixture("users-me", """
                 {"user":{"userId":"u_abc123","devices":["dev1"],"email":"me@x.com"}}""");
-        String userId = EightSleepApiClient.parseCurrentUserId(body);
+        String userId = ApiTestFixtures.parseCurrentUserId(body);
         if (isLive("users-me")) {
             assertTrue("live userId should look like a hex id", userId.length() >= 16);
         } else {
@@ -339,7 +313,7 @@ public class EndpointContractTest {
                 {"households":[{"name":"Home","sets":[
                   {"devices":[{"deviceId":"dev1","deviceName":"Master Pod"},
                               {"deviceId":"dev2"}]}]}]}""");
-        Map<String, String> devices = EightSleepApiClient.parseHouseholdDevices(body);
+        Map<String, String> devices = ApiTestFixtures.parseHouseholdDevices(body);
         if (!isLive("household-summary")) {
             assertEquals(2, devices.size());
             assertEquals("Master Pod", devices.get("dev1"));
@@ -362,21 +336,21 @@ public class EndpointContractTest {
         String body = fixture("device-users", """
                 {"result":{"leftUserId":"u_left","rightUserId":null,
                  "awaySides":{"left":"u_away"}}}""");
-        DeviceUsers users = EightSleepApiClient.parseUserIdsForDevice(body);
+        DeviceAssignments users = ApiTestFixtures.parseUserIdsForDevice(body);
         // Expectation (both modes): away membership is decided ONLY by side-slot
         // occupancy - an awaySides listing never makes an occupying user away,
         // and awaySides defaults to an empty map rather than null.
-        assertNotNull(users.awaySides);
-        if (!users.awaySides.isEmpty()) {
-            String awayId = users.awaySides.values().iterator().next();
-            boolean occupiesSlot = awayId.equals(users.leftUserId) || awayId.equals(users.rightUserId);
+        assertNotNull(users.awaySides());
+        if (!users.awaySides().isEmpty()) {
+            String awayId = users.awaySides().values().iterator().next();
+            boolean occupiesSlot = awayId.equals(users.leftUserId()) || awayId.equals(users.rightUserId());
             assertEquals("away == listed AND slot-free", !occupiesSlot, users.isAway(awayId));
         }
         if (isLive("device-users")) {
             return;
         }
-        assertEquals("u_left", users.leftUserId);
-        assertTrue("away membership is by value", users.awaySides.containsValue("u_away"));
+        assertEquals("u_left", users.leftUserId());
+        assertTrue("away membership is by value", users.awaySides().containsValue("u_away"));
     }
 
     // ==================== GET /temperature/all (pillow) ====================
@@ -389,24 +363,24 @@ public class EndpointContractTest {
                  {"device":{"specialization":"pillow","side":"left","deviceId":"pil1"},
                   "currentLevel":-15,"currentState":{"type":"smart"}}
                 ]}""");
-        PillowData data = EightSleepApiClient.parsePillowData(body);
+        PillowState data = ApiTestFixtures.parsePillowData(body);
         // Both modes: parsing never throws; absence of pillows degrades to an
         // empty list, never null.
-        assertNotNull(data.devices);
+        assertNotNull(data.devices());
         if (isLive("temperature-all")) {
-            for (PillowEntry entry : data.devices) {
-                assertNotNull("every entry identifies its specialization", entry.device);
-                Integer level = entry.getLevel();
+            for (PillowEntry entry : data.devices()) {
+                assertNotNull("every entry identifies its specialization", entry.specialization());
+                Integer level = entry.level();
                 if (entry.isPillow() && level != null) {
                     assertTrue("pillow levels stay in percent range", level >= -100 && level <= 100);
                 }
             }
             return;
         }
-        PillowEntry pillow = data.findPillow("left");
+        PillowEntry pillow = data.findPillow(BedSide.LEFT);
         assertNotNull(pillow);
         assertTrue(pillow.isOn());
-        assertEquals(-15, pillow.getLevel().intValue());
+        assertEquals(-15, pillow.level().intValue());
         assertTrue(data.containsPod("dev1"));
     }
 
@@ -417,26 +391,19 @@ public class EndpointContractTest {
         String body = fixture("temperature", """
                 {"currentLevel":-20,"currentState":{"type":"smart"},
                  "smart":{"bedTimeLevel":-32,"initialSleepLevel":-24,"finalSleepLevel":-12}}""");
-        com.google.gson.JsonObject temp = com.google.gson.JsonParser.parseString(body).getAsJsonObject();
-        assertNotNull(org.openhab.binding.eightsleep.internal.model.TrendParser.getObject(temp, "currentState"));
+        var temp = ApiTestFixtures.parseTemperature(body);
+        assertNotNull(temp.stateType());
         boolean live = isLive("temperature");
         if (!live) {
-            assertEquals(Double.valueOf(-20), org.openhab.binding.eightsleep.internal.model.TrendParser
-                    .getDouble(temp, "currentLevel"));
-            assertEquals("smart", org.openhab.binding.eightsleep.internal.model.TrendParser.getString(
-                    org.openhab.binding.eightsleep.internal.model.TrendParser.getObject(temp, "currentState"),
-                    "type"));
+            assertEquals(Double.valueOf(-20), temp.currentLevel());
+            assertEquals("smart", temp.stateType());
         }
         // Expectation (both modes): the autopilot baseline triple must parse so
         // target-temperature commands have a fallback when no manual level is set.
-        var smart = org.openhab.binding.eightsleep.internal.model.TrendParser.getObject(temp, "smart");
-        if (smart != null) {
-            Double bedtime = org.openhab.binding.eightsleep.internal.model.TrendParser.getDouble(smart,
-                    "bedTimeLevel");
-            Double initial = org.openhab.binding.eightsleep.internal.model.TrendParser.getDouble(smart,
-                    "initialSleepLevel");
-            Double finall = org.openhab.binding.eightsleep.internal.model.TrendParser.getDouble(smart,
-                    "finalSleepLevel");
+        if (!temp.smart().isEmpty()) {
+            Double bedtime = temp.smartLevel("bedTimeLevel");
+            Double initial = temp.smartLevel("initialSleepLevel");
+            Double finall = temp.smartLevel("finalSleepLevel");
             if (!live) {
                 assertEquals(Double.valueOf(-32), bedtime);
             } else if (bedtime != null && initial != null && finall != null) {
@@ -453,27 +420,27 @@ public class EndpointContractTest {
                 {"left":{"preset":{"name":"sleep"},"torso":{"currentAngle":30},
                   "leg":{"currentAngle":8},"inSnoreMitigation":false},
                  "right":{"preset":{"name":"reading"},"torso":{"currentAngle":10}}}""");
-        org.openhab.binding.eightsleep.internal.model.BaseData data = EightSleepApiClient.parseBaseData(body);
+        org.openhab.binding.eightsleep.internal.model.BaseState data = ApiTestFixtures.parseBaseData(body);
         if (isLive("base-data")) {
             // Live captures include error bodies ("NoPairedPod"): the parser must
             // degrade to an empty-but-valid object instead of throwing.
-            assertNull("error body yields no phantom sides", data.getSide("left"));
-            assertNull(data.getSide("right"));
+            assertNull("error body yields no phantom sides", data.side(BedSide.LEFT));
+            assertNull(data.side(BedSide.RIGHT));
             return;
         }
-        assertEquals("sleep", data.getSide("left").preset.name);
-        assertEquals(Integer.valueOf(30), data.getSide("left").torso.currentAngle);
-        assertEquals(Boolean.FALSE, data.getSide("left").inSnoreMitigation);
-        assertEquals("reading", data.getSide("right").preset.name);
+        assertEquals("sleep", data.side(BedSide.LEFT).presetName());
+        assertEquals(Integer.valueOf(30), data.side(BedSide.LEFT).torsoAngle());
+        assertEquals(Boolean.FALSE, data.side(BedSide.LEFT).inSnoreMitigation());
+        assertEquals("reading", data.side(BedSide.RIGHT).presetName());
     }
 
     /** Error bodies for accounts without a paired pod/base parse to an empty object. */
     @Test
     public void baseDataErrorBodyYieldsEmptyObject() {
-        org.openhab.binding.eightsleep.internal.model.BaseData data = EightSleepApiClient
+        org.openhab.binding.eightsleep.internal.model.BaseState data = ApiTestFixtures
                 .parseBaseData("{\"message\":\"User not paired to device\",\"errorType\":\"NoPairedPod\"}");
-        assertNull(data.getSide("left"));
-        assertNull(data.getSide("right"));
+        assertNull(data.side(BedSide.LEFT));
+        assertNull(data.side(BedSide.RIGHT));
     }
 
     // ==================== GET /v1/users/{id}/audio/player ====================
@@ -485,18 +452,18 @@ public class EndpointContractTest {
                  "currentTrack":{"id":"t1","name":"Rain","categoryId":"nature",
                    "currentPosition":12.5,"trackDuration":600.0},
                  "hardwareInfo":{"sku":"POD5","hardwareVersion":"hw1","softwareVersion":"sw1"}}""");
-        org.openhab.binding.eightsleep.internal.model.PlayerState state = EightSleepApiClient.parsePlayerState(body);
+        org.openhab.binding.eightsleep.internal.model.PlayerState state = ApiTestFixtures.parsePlayerState(body);
         if (isLive("player-state")) {
             // Live captures include 404 bodies (no speaker): absence must surface
             // as a speaker-less state, not fabricated defaults.
             assertFalse("404 body must not fabricate hardware", state.hasSpeaker());
-            assertNull("absent volume stays unknown", state.getVolumePercent());
+            assertNull("absent volume stays unknown", state.volume());
             return;
         }
         assertTrue(state.isPlaying());
         assertFalse(state.isPaused());
-        assertEquals(30, state.getVolumePercent().intValue());
+        assertEquals(30, state.volume().intValue());
         assertTrue(state.hasSpeaker());
-        assertEquals("Rain", state.currentTrack.name);
+        assertEquals("Rain", state.currentTrack().name());
     }
 }
